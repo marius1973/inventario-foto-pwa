@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>InventarioFoto</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { overscroll-behavior-y: none; }
+        .app-container { padding-bottom: 80px; }
+        .camera-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: #000; z-index: 100; display: none;
+        }
+        .camera-overlay.active { display: flex; flex-direction: column; }
+        .shutter-btn {
+            width: 72px; height: 72px; border-radius: 50%;
+            border: 4px solid rgba(255,255,255,0.4);
+            background: white; position: relative;
+        }
+        .shutter-btn::after {
+            content: ''; position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 56px; height: 56px; border-radius: 50%;
+            background: white;
+        }
+        .shutter-btn:active::after { background: #ef4444; }
+        .product-card { transition: all 0.2s; }
+        .product-card:active { transform: scale(0.98); }
+        .tipo-chip { transition: all 0.15s; }
+        .tipo-chip:active { transform: scale(0.95); }
+        .slide-up { animation: slideUp 0.3s ease-out; }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.2s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .pulse-ring { animation: pulseRing 2s infinite; }
+        @keyframes pulseRing {
+            0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+            70% { box-shadow: 0 0 0 12px rgba(59, 130, 246, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+        .offline-badge {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: #f59e0b; color: white; text-align: center;
+            padding: 4px; font-size: 12px; z-index: 50; display: none;
+        }
+        .offline-badge.show { display: block; }
+        input, textarea, select { font-size: 16px; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <div id="offline-badge" class="offline-badge">
+        📴 Modo offline - Los datos se sincronizaran cuando haya conexion
+    </div>
+    <div id="app" class="app-container min-h-screen">
+        <header class="bg-slate-900 text-white sticky top-0 z-40 shadow-lg">
+            <div class="flex items-center justify-between px-4 h-14">
+                <div class="flex items-center space-x-2">
+                    <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center text-lg">📸</div>
+                    <h1 class="font-bold text-lg tracking-tight">Inventario<span class="text-blue-400">Foto</span></h1>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <button onclick="app.buscarToggle()" class="p-2 rounded-lg hover:bg-slate-700 transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    </button>
+                    <button onclick="app.syncManual()" id="sync-btn" class="p-2 rounded-lg hover:bg-slate-700 transition relative">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        <span id="pending-count" class="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-xs flex items-center justify-center hidden">0</span>
+                    </button>
+                </div>
+            </div>
+            <div id="search-bar" class="hidden px-4 pb-3">
+                <input type="text" id="search-input" placeholder="Buscar producto..." 
+                    class="w-full bg-slate-800 text-white rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    oninput="app.buscar(this.value)">
+            </div>
+        </header>
+        <main id="main-content"></main>
+    </div>
+
+    <div id="camera-overlay" class="camera-overlay">
+        <video id="camera-video" autoplay playsinline class="flex-1 object-cover"></video>
+        <canvas id="camera-canvas" class="hidden"></canvas>
+        <div id="capture-preview" class="hidden absolute inset-0 bg-black">
+            <img id="preview-img" class="w-full h-full object-contain">
+            <div class="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/80 to-transparent">
+                <div class="flex justify-center space-x-8">
+                    <button onclick="app.retakePhoto()" class="flex flex-col items-center text-white">
+                        <div class="w-14 h-14 rounded-full bg-white/20 flex items-center justify-center mb-1">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </div>
+                        <span class="text-xs">Repetir</span>
+                    </button>
+                    <button onclick="app.confirmPhoto()" class="flex flex-col items-center text-white">
+                        <div class="w-14 h-14 rounded-full bg-green-500 flex items-center justify-center mb-1">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        </div>
+                        <span class="text-xs">Usar</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div id="camera-controls" class="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/60 to-transparent">
+            <div class="flex justify-center items-center">
+                <button onclick="app.takePhoto()" class="shutter-btn pulse-ring"></button>
+            </div>
+            <p class="text-white/70 text-center text-xs mt-4">Toca para capturar el producto</p>
+        </div>
+        <button onclick="app.closeCamera()" class="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+    </div>
+
+    <div id="modal-tipo" class="fixed inset-0 bg-black/50 z-50 hidden flex items-end sm:items-center justify-center">
+        <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-96 p-6 slide-up">
+            <h3 class="text-lg font-bold mb-4">Crear nuevo tipo</h3>
+            <input type="text" id="nuevo-tipo-nombre" placeholder="Ej: Electronica, Herramientas..."
+                class="w-full border border-slate-200 rounded-lg px-4 py-3 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <div class="flex space-x-2 mb-4 overflow-x-auto hide-scrollbar py-1">
+                <button onclick="app.selectIcon(this, '📦')" class="icon-btn w-10 h-10 rounded-lg bg-slate-100 text-xl flex items-center justify-center hover:bg-blue-100">📦</button>
+                <button onclick="app.selectIcon(this, '🔌')" class="icon-btn w-10 h-10 rounded-lg bg-slate-100 text-xl flex items-center justify-center hover:bg-blue-100">🔌</button>
+                <button onclick="app.selectIcon(this, '🔧')" class="icon-btn w-10 h-10 rounded-lg bg-slate-100 text-xl flex items-center justify-center hover:bg-blue-100">🔧</button>
+                <button onclick="app.selectIcon(this, '🍎')" class="icon-btn w-10 h-10 rounded-lg bg-slate-100 text-xl flex items-center justify-center hover:bg-blue-100">🍎</button>
+                <button onclick="app.selectIcon(this, '👕')" class="icon-btn w-10 h-10 rounded-lg bg-slate-100 text-xl flex items-center justify-center hover:bg-blue-100">👕</button>
+                <button onclick="app.selectIcon(this, '🏠')" class="icon-btn w-10 h-10 rounded-lg bg-slate-100 text-xl flex items-center justify-center hover:bg-blue-100">🏠</button>
+                <button onclick="app.selectIcon(this, '✏️')" class="icon-btn w-10 h-10 rounded-lg bg-slate-100 text-xl flex items-center justify-center hover:bg-blue-100">✏️</button>
+            </div>
+            <div class="flex space-x-3">
+                <button onclick="app.cerrarModalTipo()" class="flex-1 py-3 rounded-lg bg-slate-100 text-slate-700 font-medium">Cancelar</button>
+                <button onclick="app.guardarNuevoTipo()" class="flex-1 py-3 rounded-lg bg-blue-500 text-white font-medium">Crear</button>
+            </div>
+        </div>
+    </div>
+
+    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40">
+        <div class="flex justify-around items-center h-16">
+            <button onclick="app.nav('inicio')" class="nav-btn flex flex-col items-center space-y-1 p-2 text-blue-500" data-view="inicio">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                <span class="text-xs font-medium">Inicio</span>
+            </button>
+            <button onclick="app.openCamera()" class="relative -top-5 bg-blue-500 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg shadow-blue-500/30 hover:scale-105 transition">
+                <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+            <button onclick="app.nav('historial')" class="nav-btn flex flex-col items-center space-y-1 p-2 text-slate-400" data-view="historial">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+                <span class="text-xs font-medium">Historial</span>
+            </button>
+        </div>
+    </nav>
+
+    <div id="toast" class="fixed top-20 left-4 right-4 bg-slate-800 text-white px-4 py-3 rounded-xl shadow-xl z-50 transform -translate-y-20 opacity-0 transition-all duration-300 flex items-center space-x-3">
+        <span id="toast-icon">✅</span>
+        <span id="toast-message" class="text-sm font-medium">Mensaje</span>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
