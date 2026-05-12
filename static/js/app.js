@@ -23,6 +23,7 @@ class InventarioApp {
         await this.initIndexedDB();
         this.setupEventListeners();
         this.checkOnlineStatus();
+        await this.getPendientes();
         await this.cargarDatos();
         this.renderInicio();
         this.updatePendingCount();
@@ -207,22 +208,119 @@ class InventarioApp {
         `;
     }
 
+    cameraErrorMessage(err) {
+        if (!err) return 'No se pudo usar la camara';
+        switch (err.name) {
+            case 'NotAllowedError':
+            case 'PermissionDeniedError':
+                return 'Permiso de camara denegado; revisa los ajustes del navegador.';
+            case 'NotFoundError':
+            case 'DevicesNotFoundError':
+                return 'No se encontro ninguna camara en este dispositivo.';
+            case 'NotReadableError':
+            case 'TrackStartError':
+                return 'La camara esta en uso o no se puede abrir.';
+            case 'OverconstrainedError':
+                return 'La camara no admite el modo solicitado; prueba otra vez.';
+            case 'SecurityError':
+                return 'Conexion no segura: la camara del navegador requiere HTTPS.';
+            default:
+                return err.message || 'Error accediendo a la camara';
+        }
+    }
+
+    ensurePhotoFileInput() {
+        if (this._photoInput) return this._photoInput;
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.className = 'sr-only';
+        input.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;opacity:0;';
+        input.addEventListener('change', () => {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                this.fotoCapturada = reader.result;
+                this.renderFormularioProducto();
+            };
+            reader.onerror = () => this.showToast('No se pudo leer la imagen', 'error');
+            reader.readAsDataURL(file);
+        });
+        document.body.appendChild(input);
+        this._photoInput = input;
+        return input;
+    }
+
+    pickPhotoFromDevice() {
+        const input = this.ensurePhotoFileInput();
+        if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')) {
+            input.setAttribute('capture', 'environment');
+        } else {
+            input.removeAttribute('capture');
+        }
+        input.click();
+    }
+
     async openCamera() {
         const overlay = document.getElementById('camera-overlay');
         const video = document.getElementById('camera-video');
-        try {
-            this.stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-                audio: false
-            });
-            video.srcObject = this.stream;
-            overlay.classList.add('active');
-            document.getElementById('capture-preview').classList.add('hidden');
-            document.getElementById('camera-controls').classList.remove('hidden');
-            this.fotoCapturada = null;
-        } catch (err) {
-            this.showToast('Error accediendo a la camara', 'error');
-            console.error(err);
+
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+            this.showToast('Tu navegador no permite la camara web aqui. Usa el selector de imagen.', 'warning');
+            setTimeout(() => {
+                if (confirm('Abrir galeria o archivos para elegir una foto?')) this.pickPhotoFromDevice();
+            }, 250);
+            return;
+        }
+
+        if (!window.isSecureContext) {
+            this.showToast('Con HTTP la camara del navegador esta bloqueada. Usa HTTPS (despliegue o tunel) o elige una foto.', 'warning');
+            this.pickPhotoFromDevice();
+            return;
+        }
+
+        const tries = [
+            { video: { facingMode: { ideal: 'environment' } }, audio: false },
+            { video: { facingMode: 'environment' }, audio: false },
+            { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+            { video: true, audio: false }
+        ];
+
+        let lastErr;
+        for (const constraints of tries) {
+            try {
+                if (this.stream) {
+                    this.stream.getTracks().forEach(t => t.stop());
+                    this.stream = null;
+                }
+                this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = this.stream;
+                video.muted = true;
+                try {
+                    await video.play();
+                } catch (_) { /* algunos moviles lanzan si no hay gesto previo */ }
+                overlay.classList.add('active');
+                document.getElementById('capture-preview').classList.add('hidden');
+                document.getElementById('camera-controls').classList.remove('hidden');
+                this.fotoCapturada = null;
+                return;
+            } catch (e) {
+                lastErr = e;
+            }
+        }
+
+        const msg = this.cameraErrorMessage(lastErr);
+        this.showToast(msg, 'error');
+        console.error(lastErr);
+        const denied = lastErr && (lastErr.name === 'NotAllowedError' || lastErr.name === 'PermissionDeniedError');
+        if (!denied) {
+            setTimeout(() => {
+                if (confirm('Quieres elegir una imagen desde la galeria o la camara del sistema?')) {
+                    this.pickPhotoFromDevice();
+                }
+            }, 300);
         }
     }
 
@@ -385,8 +483,17 @@ class InventarioApp {
                     this.showToast('Producto guardado', 'success');
                     this.fotoCapturada = null;
                     this.nav('inicio');
-                } else { throw new Error('Error servidor'); }
-            } catch (e) { await this.guardarOffline(producto); }
+                } else {
+                    let msg = 'No se pudo guardar el producto';
+                    try {
+                        const err = await response.json();
+                        if (err && err.error) msg = err.error;
+                    } catch (_) { /* ignore */ }
+                    this.showToast(msg, 'error');
+                }
+            } catch (e) {
+                await this.guardarOffline(producto);
+            }
         } else { await this.guardarOffline(producto); }
     }
 

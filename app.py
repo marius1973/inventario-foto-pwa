@@ -105,6 +105,13 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/sw.js')
+def service_worker():
+    response = send_from_directory('static', 'sw.js')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+
 @app.route('/uploads/fotos/<filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
@@ -122,7 +129,10 @@ def get_tipos():
 
 @app.route('/api/tipos-producto', methods=['POST'])
 def create_tipo():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
+    nombre = (data.get('nombre') or '').strip()
+    if not nombre:
+        return jsonify({'error': 'El nombre del tipo es obligatorio'}), 400
     tipo_id = f"tipo-{uuid.uuid4().hex[:8]}"
     conn = get_db()
     cursor = conn.cursor()
@@ -130,7 +140,7 @@ def create_tipo():
         cursor.execute("""
             INSERT INTO tipos_producto (id, nombre, descripcion, icono, color)
             VALUES (?, ?, ?, ?, ?)
-        """, (tipo_id, data.get('nombre'), data.get('descripcion', ''), data.get('icono', '📦'), data.get('color', '#3b82f6')))
+        """, (tipo_id, nombre, data.get('descripcion', ''), data.get('icono', '📦'), data.get('color', '#3b82f6')))
         conn.commit()
         cursor.execute("SELECT * FROM tipos_producto WHERE id = ?", (tipo_id,))
         tipo = dict(cursor.fetchone())
@@ -194,19 +204,25 @@ def create_producto():
     cantidad = int(request.form.get('cantidad', 1))
     precio = request.form.get('precio_unitario')
     precio_unitario = float(precio) if precio else None
-    tipo_producto_id = request.form.get('tipo_producto_id')
-    nuevo_tipo_nombre = request.form.get('nuevo_tipo_nombre')
+    tipo_producto_id = (request.form.get('tipo_producto_id') or '').strip() or None
+    nuevo_tipo_nombre = (request.form.get('nuevo_tipo_nombre') or '').strip()
     texto_ocr = request.form.get('texto_ocr', '')
+
+    if not nombre:
+        return jsonify({'error': 'El nombre del producto es obligatorio'}), 400
 
     if nuevo_tipo_nombre and not tipo_producto_id:
         conn = get_db()
         cursor = conn.cursor()
         tipo_id = f"tipo-{uuid.uuid4().hex[:8]}"
         cursor.execute("INSERT INTO tipos_producto (id, nombre, descripcion, icono, color) VALUES (?, ?, ?, ?, ?)",
-                       (tipo_id, nuevo_tipo_nombre, 'Creado desde app', '📦', '#3b82f6'))
+                       (tipo_id, nuevo_tipo_nombre.strip(), 'Creado desde app', '📦', '#3b82f6'))
         conn.commit()
         tipo_producto_id = tipo_id
         conn.close()
+
+    if not tipo_producto_id:
+        return jsonify({'error': 'Debe seleccionar un tipo o indicar uno nuevo'}), 400
 
     foto_url = None
     foto_thumbnail = None
@@ -278,7 +294,9 @@ def get_estadisticas():
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM productos")
     total_productos = cursor.fetchone()[0]
-    cursor.execute("SELECT COALESCE(SUM(cantidad * precio_unitario), 0) FROM productos")
+    cursor.execute("""
+        SELECT COALESCE(SUM(cantidad * COALESCE(precio_unitario, 0)), 0) FROM productos
+    """)
     valor_total = cursor.fetchone()[0]
     cursor.execute("""
         SELECT t.nombre, t.icono, t.color, COUNT(p.id) as cantidad
@@ -297,11 +315,14 @@ def get_estadisticas():
 
 @app.route('/api/sync', methods=['POST'])
 def sync_offline():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     productos_pendientes = data.get('productos', [])
     sincronizados = []
     for item in productos_pendientes:
         try:
+            nombre = (item.get('nombre') or '').strip()
+            if not nombre:
+                continue
             producto_id = f"prod-{uuid.uuid4().hex[:8]}"
             foto_url = None
             foto_thumbnail = None
@@ -317,21 +338,28 @@ def sync_offline():
                 foto_url = f"/uploads/fotos/{filename}"
                 foto_thumbnail = generar_thumbnail(img_data)
             tipo_id = item.get('tipo_producto_id')
-            if item.get('nuevo_tipo_nombre') and not tipo_id:
+            if tipo_id:
+                tipo_id = str(tipo_id).strip() or None
+            else:
+                tipo_id = None
+            nuevo = (item.get('nuevo_tipo_nombre') or '').strip()
+            if nuevo and not tipo_id:
                 tipo_id = f"tipo-{uuid.uuid4().hex[:8]}"
                 conn = get_db()
                 cursor = conn.cursor()
                 cursor.execute("INSERT INTO tipos_producto (id, nombre, descripcion, icono, color) VALUES (?, ?, ?, ?, ?)",
-                               (tipo_id, item['nuevo_tipo_nombre'], 'Creado offline', '📦', '#3b82f6'))
+                               (tipo_id, nuevo, 'Creado offline', '📦', '#3b82f6'))
                 conn.commit()
                 conn.close()
+            if not tipo_id:
+                continue
             conn = get_db()
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO productos (id, nombre, descripcion, codigo_barras, cantidad, precio_unitario,
                 tipo_producto_id, foto_url, foto_thumbnail, texto_ocr, fecha_creacion, fecha_actualizacion, sincronizado)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (producto_id, item['nombre'], item.get('descripcion', ''), item.get('codigo_barras', ''),
+            """, (producto_id, nombre, item.get('descripcion', ''), item.get('codigo_barras', ''),
                   item.get('cantidad', 1), item.get('precio_unitario'), tipo_id, foto_url, foto_thumbnail,
                   item.get('texto_ocr', ''), item.get('fecha_creacion', datetime.now().isoformat()),
                   datetime.now().isoformat(), 1))
@@ -343,11 +371,14 @@ def sync_offline():
     return jsonify({'sincronizados': len(sincronizados), 'detalles': sincronizados})
 
 
+init_db()
+
 if __name__ == '__main__':
-    init_db()
+    port = int(os.environ.get("PORT", "5000"))
+    production = os.environ.get("FLASK_ENV") == "production"
     print("=" * 60)
     print("INVENTARIO FOTO - Sistema de Inventario por Fotografia")
     print("=" * 60)
-    print("Abre http://localhost:5000 en tu navegador")
+    print(f"Abre http://127.0.0.1:{port} en tu navegador")
     print("=" * 60)
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=not production, host="0.0.0.0", port=port)

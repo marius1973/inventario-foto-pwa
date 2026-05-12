@@ -87,7 +87,7 @@
     </div>
 
     <div id="camera-overlay" class="camera-overlay">
-        <video id="camera-video" autoplay playsinline class="flex-1 object-cover"></video>
+        <video id="camera-video" autoplay playsinline muted class="flex-1 object-cover"></video>
         <canvas id="camera-canvas" class="hidden"></canvas>
         <div id="capture-preview" class="hidden absolute inset-0 bg-black">
             <img id="preview-img" class="w-full h-full object-contain">
@@ -162,5 +162,12 @@
     </div>
 
     <script src="/static/js/app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(function (err) {
+                console.warn('Service worker:', err);
+            });
+        }
+    </script>
 </body>
 </html>
