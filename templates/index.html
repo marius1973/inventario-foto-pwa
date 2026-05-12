@@ -14,6 +14,17 @@
         * { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         body { overscroll-behavior-y: none; }
         .app-container { padding-bottom: 80px; }
+        button { cursor: pointer; -webkit-user-select: none; user-select: none; }
+        button:active { opacity: 0.8; }
+        /* iOS fixes */
+        input, textarea, select {
+            font-size: 16px;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+        }
+        nav { z-index: 40 !important; }
+        .modal { z-index: 50 !important; }
         .camera-overlay {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: #000; z-index: 100; display: none;

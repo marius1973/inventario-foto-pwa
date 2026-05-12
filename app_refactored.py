@@ -741,18 +741,16 @@ def crear_aplicacion() -> Flask:
 # PUNTO DE ENTRADA
 # ============================================================================
 
-if __name__ == '__main__':
-    inicializar_base_datos()
-    app = crear_aplicacion()
+# Crear la aplicación a nivel de módulo para gunicorn
+inicializar_base_datos()
+app = crear_aplicacion()
 
+# Solo para ejecución local (python app.py)
+if __name__ == '__main__':
     print("=" * 70)
     print("INVENTARIO FOTO - Sistema de Inventario por Fotografía")
     print("=" * 70)
     print(f"Abre http://127.0.0.1:{config.PORT} en tu navegador")
     print("=" * 70)
 
-    app.run(
-        debug=config.DEBUG,
-        host='0.0.0.0',
-        port=config.PORT
-    )
+   
