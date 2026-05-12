@@ -1,0 +1,15 @@
+# Blueprint para https://render.com — Web service con HTTPS automático.
+# Nuevo → Blueprint → conectar el repo y aplicar este archivo.
+
+services:
+  - type: web
+    name: inventario-foto-pwa
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PYTHONUNBUFFERED
+        value: "1"
