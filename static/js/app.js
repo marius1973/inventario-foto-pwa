@@ -1,41 +1,135 @@
 /**
- * InventarioFoto - Aplicacion PWA completa
+ * InventarioFoto - Aplicación PWA de gestión de inventario
+ *
+ * Arquitectura:
+ * - ApiService: Comunicación con backend
+ * - StorageService: Gestión de IndexedDB (datos offline)
+ * - SyncService: Sincronización de datos
+ * - CameraManager: Captura y procesamiento de fotos
+ * - UIManager: Renderización y eventos
+ * - InventarioApp: Orquestación principal
  */
 
-const API_BASE = '';
+// ============================================================================
+// CONSTANTES
+// ============================================================================
 
-class InventarioApp {
+const CONSTANTS = {
+    API_BASE: '',
+    CACHE_KEY_PRODUCTOS: 'productos',
+    CACHE_KEY_TIPOS: 'tipos',
+    DB_NAME: 'InventarioDB',
+    DB_VERSION: 1,
+    PRODUCTOS_POR_PAGINA: 10,
+    TOAST_DURATION_MS: 3000,
+    CAMERA_TIMEOUT_MS: 2000,
+    VIDEO_FRAME_WAIT_ATTEMPTS: 30,
+    THUMBNAIL_PLACEHOLDER: '📦',
+};
+
+// ============================================================================
+// API SERVICE - Comunicación con servidor
+// ============================================================================
+
+class ApiService {
+    /**
+     * Servicio para todas las comunicaciones REST con el backend.
+     */
+
+    static async fetchJson(endpoint, options = {}) {
+        const url = `${CONSTANTS.API_BASE}${endpoint}`;
+        try {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error || `Error ${response.status}`);
+            }
+            return await response.json();
+        } catch (error) {
+            console.error(`Error en ${endpoint}:`, error);
+            throw error;
+        }
+    }
+
+    // Tipos de productos
+    static getTipos() {
+        return this.fetchJson('/api/tipos-producto');
+    }
+
+    static crearTipo(nombre, descripcion = '', icono = '📦', color = '#3b82f6') {
+        return this.fetchJson('/api/tipos-producto', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nombre, descripcion, icono, color }),
+        });
+    }
+
+    // Productos
+    static getProductos(filtros = {}) {
+        const params = new URLSearchParams();
+        if (filtros.tipo_id) params.append('tipo_id', filtros.tipo_id);
+        if (filtros.q) params.append('q', filtros.q);
+
+        const queryString = params.toString();
+        const endpoint = queryString ? `/api/productos?${queryString}` : '/api/productos';
+        return this.fetchJson(endpoint);
+    }
+
+    static getProducto(id) {
+        return this.fetchJson(`/api/productos/${id}`);
+    }
+
+    static crearProducto(formData) {
+        return this.fetchJson('/api/productos', {
+            method: 'POST',
+            body: formData,
+        });
+    }
+
+    static eliminarProducto(id) {
+        return this.fetchJson(`/api/productos/${id}`, {
+            method: 'DELETE',
+        });
+    }
+
+    static getEstadisticas() {
+        return this.fetchJson('/api/estadisticas');
+    }
+
+    static sincronizar(productos) {
+        return this.fetchJson('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ productos }),
+        });
+    }
+}
+
+// ============================================================================
+// STORAGE SERVICE - Gestión de datos offline
+// ============================================================================
+
+class StorageService {
+    /**
+     * Maneja almacenamiento en IndexedDB para soporte offline.
+     */
+
     constructor() {
-        this.currentView = 'inicio';
-        this.productos = [];
-        this.tipos = [];
-        this.tipoSeleccionado = null;
-        this.fotoCapturada = null;
-        this.stream = null;
-        this.iconoSeleccionado = '📦';
         this.db = null;
-        this.pendientes = [];
-        this.isOnline = navigator.onLine;
-        this.init();
     }
 
     async init() {
-        await this.initIndexedDB();
-        this.setupEventListeners();
-        this.checkOnlineStatus();
-        await this.getPendientes();
-        await this.cargarDatos();
-        this.renderInicio();
-        this.updatePendingCount();
-    }
-
-    initIndexedDB() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open('InventarioDB', 1);
+            const request = indexedDB.open(CONSTANTS.DB_NAME, CONSTANTS.DB_VERSION);
+
             request.onerror = () => reject(request.error);
-            request.onsuccess = () => { this.db = request.result; resolve(); };
-            request.onupgradeneeded = (e) => {
-                const db = e.target.result;
+            request.onsuccess = () => {
+                this.db = request.result;
+                resolve();
+            };
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
                 if (!db.objectStoreNames.contains('productos')) {
                     db.createObjectStore('productos', { keyPath: 'temp_id' });
                 }
@@ -47,31 +141,27 @@ class InventarioApp {
     }
 
     async guardarPendiente(producto) {
-        const tempId = 'temp-' + Date.now();
+        const tempId = `temp-${Date.now()}`;
         producto.temp_id = tempId;
         producto.fecha_creacion = new Date().toISOString();
+
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction('productos', 'readwrite');
             const store = tx.objectStore('productos');
             const request = store.put(producto);
-            request.onsuccess = () => {
-                this.pendientes.push(producto);
-                this.updatePendingCount();
-                resolve(tempId);
-            };
+
+            request.onsuccess = () => resolve(tempId);
             request.onerror = () => reject(request.error);
         });
     }
 
-    async getPendientes() {
+    async obtenerPendientes() {
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction('productos', 'readonly');
             const store = tx.objectStore('productos');
             const request = store.getAll();
-            request.onsuccess = () => {
-                this.pendientes = request.result;
-                resolve(request.result);
-            };
+
+            request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
     }
@@ -81,120 +171,303 @@ class InventarioApp {
             const tx = this.db.transaction('productos', 'readwrite');
             const store = tx.objectStore('productos');
             const request = store.clear();
-            request.onsuccess = () => {
-                this.pendientes = [];
-                this.updatePendingCount();
-                resolve();
-            };
+
+            request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
         });
     }
+}
 
-    setupEventListeners() {
-        window.addEventListener('online', () => {
-            this.isOnline = true;
-            document.getElementById('offline-badge').classList.remove('show');
-            this.showToast('Conexion restaurada', 'success');
-            this.syncAutomatico();
-        });
-        window.addEventListener('offline', () => {
-            this.isOnline = false;
-            document.getElementById('offline-badge').classList.add('show');
-            this.showToast('Modo offline activado', 'warning');
-        });
+// ============================================================================
+// SYNC SERVICE - Sincronización de datos
+// ============================================================================
+
+class SyncService {
+    /**
+     * Gestiona la sincronización de datos entre cliente y servidor.
+     */
+
+    constructor(storageService) {
+        this.storage = storageService;
+        this.onProgress = null;
     }
 
-    checkOnlineStatus() {
-        if (!this.isOnline) document.getElementById('offline-badge').classList.add('show');
+    async sincronizar() {
+        const pendientes = await this.storage.obtenerPendientes();
+
+        if (pendientes.length === 0) {
+            return { sincronizados: 0, total: 0 };
+        }
+
+        try {
+            const resultado = await ApiService.sincronizar(pendientes);
+            await this.storage.limpiarPendientes();
+            return resultado;
+        } catch (error) {
+            console.error('Error en sincronización:', error);
+            throw error;
+        }
     }
 
-    nav(view) {
-        this.currentView = view;
+    async obtenerPendientes() {
+        return await this.storage.obtenerPendientes();
+    }
+
+    async obtenerCountPendientes() {
+        const pendientes = await this.obtenerPendientes();
+        return pendientes.length;
+    }
+}
+
+// ============================================================================
+// CAMERA MANAGER - Gestión de captura de fotos
+// ============================================================================
+
+class CameraManager {
+    /**
+     * Maneja la captura de fotos desde cámara o galería.
+     */
+
+    constructor() {
+        this.stream = null;
+        this.fotoCapturada = null;
+    }
+
+    crearInputFoto() {
+        if (this._fotoInput) return this._fotoInput;
+
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.className = 'sr-only';
+        input.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;opacity:0;';
+
+        input.addEventListener('change', () => {
+            const file = input.files?.[0];
+            input.value = '';
+
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                this.fotoCapturada = reader.result;
+                this.onFotoCapturada?.(this.fotoCapturada);
+            };
+            reader.onerror = () => {
+                console.error('Error leyendo imagen');
+                this.onError?.('No se pudo leer la imagen');
+            };
+            reader.readAsDataURL(file);
+        });
+
+        document.body.appendChild(input);
+        this._fotoInput = input;
+        return input;
+    }
+
+    abrirGaleria() {
+        const input = this.criarInputFoto();
+
+        const esMovil = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+        if (esMovil) {
+            input.setAttribute('capture', 'environment');
+        } else {
+            input.removeAttribute('capture');
+        }
+
+        input.click();
+    }
+
+    async abrirCamara() {
+        if (!this._puedeLeerCamara()) {
+            this.onError?.('Tu navegador no permite usar la cámara');
+            return;
+        }
+
+        if (!window.isSecureContext) {
+            this.onError?.('Se requiere HTTPS para usar la cámara');
+            return;
+        }
+
+        const restricciones = [
+            { video: { facingMode: { ideal: 'environment' } }, audio: false },
+            { video: { facingMode: 'environment' }, audio: false },
+            { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+            { video: true, audio: false },
+        ];
+
+        for (const restriccion of restricciones) {
+            try {
+                this._detenerStream();
+                const stream = await navigator.mediaDevices.getUserMedia(restriccion);
+                this._iniciarStream(stream);
+                return;
+            } catch (error) {
+                console.log(`Restricción falló, intentando siguiente...`, error.name);
+                continue;
+            }
+        }
+
+        this.onError?.('No se pudo acceder a la cámara');
+    }
+
+    _puedeLeerCamara() {
+        return navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
+    }
+
+    _iniciarStream(stream) {
+        this.stream = stream;
+        const video = document.getElementById('camera-video');
+        if (video) {
+            video.srcObject = stream;
+            video.muted = true;
+            video.play().catch(() => {
+                // Algunos dispositivos requieren gesto del usuario
+            });
+        }
+        this.onStreamStarted?.();
+    }
+
+    _detenerStream() {
+        if (this.stream) {
+            this.stream.getTracks().forEach(track => track.stop());
+            this.stream = null;
+        }
+    }
+
+    cerrar() {
+        this._detenerStream();
+        this.fotoCapturada = null;
+        this.onClosed?.();
+    }
+
+    async capturarFoto() {
+        const video = document.getElementById('camera-video');
+        const canvas = document.getElementById('camera-canvas');
+
+        if (!video) return;
+
+        await this._esperarVideoListo(video);
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+
+        this.fotoCapturada = canvas.toDataURL('image/jpeg', 0.85);
+
+        if (!this.fotoCapturada || this.fotoCapturada.length < 200) {
+            this.onError?.('La foto capturada está vacía');
+            return;
+        }
+
+        this.onFotoCapturada?.(this.fotoCapturada);
+    }
+
+    async _esperarVideoListo(video) {
+        if (video.readyState < 2) {
+            await new Promise(resolve => {
+                video.addEventListener('loadeddata', resolve, { once: true });
+                video.addEventListener('loadedmetadata', resolve, { once: true });
+                setTimeout(resolve, CONSTANTS.CAMERA_TIMEOUT_MS);
+            });
+        }
+
+        for (let i = 0; i < CONSTANTS.VIDEO_FRAME_WAIT_ATTEMPTS; i++) {
+            if (video.videoWidth > 0 && video.videoHeight > 0) break;
+            await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+    }
+}
+
+// ============================================================================
+// UI MANAGER - Renderización y gestión de UI
+// ============================================================================
+
+class UIManager {
+    /**
+     * Gestiona toda la renderización y manipulación del DOM.
+     */
+
+    static mostrarToast(mensaje, tipo = 'info') {
+        const iconos = {
+            success: '✅',
+            error: '❌',
+            warning: '⚠️',
+            info: '💡',
+        };
+
+        const toast = document.getElementById('toast');
+        document.getElementById('toast-icon').textContent = iconos[tipo] || '💡';
+        document.getElementById('toast-message').textContent = mensaje;
+
+        toast.classList.remove('-translate-y-20', 'opacity-0');
+        toast.classList.add('translate-y-0', 'opacity-100');
+
+        setTimeout(() => {
+            toast.classList.add('-translate-y-20', 'opacity-0');
+            toast.classList.remove('translate-y-0', 'opacity-100');
+        }, CONSTANTS.TOAST_DURATION_MS);
+    }
+
+    static actualizarBadgePendientes(count) {
+        const badge = document.getElementById('pending-count');
+        if (count > 0) {
+            badge.textContent = count;
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+
+    static actualizarBadgeOffline(estaOffline) {
+        const badge = document.getElementById('offline-badge');
+        if (estaOffline) {
+            badge.classList.add('show');
+        } else {
+            badge.classList.remove('show');
+        }
+    }
+
+    static abrirModal(modalId) {
+        document.getElementById(modalId).classList.remove('hidden');
+    }
+
+    static cerrarModal(modalId) {
+        document.getElementById(modalId).classList.add('hidden');
+    }
+
+    static cambiarVista(vista) {
         document.querySelectorAll('.nav-btn').forEach(btn => {
-            const isActive = btn.dataset.view === view;
+            const isActive = btn.dataset.view === vista;
             btn.classList.toggle('text-blue-500', isActive);
             btn.classList.toggle('text-slate-400', !isActive);
         });
-        if (view === 'inicio') this.renderInicio();
-        else if (view === 'historial') this.renderHistorial();
     }
 
-    async renderInicio() {
-        const stats = await this.fetchData('/api/estadisticas');
-        const container = document.getElementById('main-content');
-        container.innerHTML = `
-            <div class="fade-in">
-                <div class="grid grid-cols-2 gap-4 p-4">
-                    <div class="bg-white rounded-2xl p-4 shadow-sm">
-                        <div class="text-2xl font-bold text-slate-900">${stats?.total_productos || 0}</div>
-                        <div class="text-xs text-slate-500 mt-1">Productos</div>
-                    </div>
-                    <div class="bg-white rounded-2xl p-4 shadow-sm">
-                        <div class="text-2xl font-bold text-slate-900">$${(stats?.valor_total || 0).toLocaleString()}</div>
-                        <div class="text-xs text-slate-500 mt-1">Valor total</div>
-                    </div>
-                </div>
-                <div class="px-4 mb-4">
-                    <div class="flex justify-between items-center mb-3">
-                        <h2 class="font-semibold text-slate-900">Categorias</h2>
-                        <button onclick="app.abrirModalTipo()" class="text-blue-500 text-sm font-medium">+ Nuevo</button>
-                    </div>
-                    <div class="flex space-x-3 overflow-x-auto hide-scrollbar pb-2">
-                        <button onclick="app.filtrarTipo(null)" 
-                            class="tipo-chip flex-shrink-0 flex items-center space-x-2 px-4 py-2 rounded-full ${!this.tipoSeleccionado ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 shadow-sm'}">
-                            <span>📋</span><span class="text-sm font-medium">Todos</span>
-                        </button>
-                        ${this.tipos.map(t => `
-                            <button onclick="app.filtrarTipo('${t.id}')" 
-                                class="tipo-chip flex-shrink-0 flex items-center space-x-2 px-4 py-2 rounded-full ${this.tipoSeleccionado === t.id ? 'ring-2 ring-offset-2' : 'bg-white shadow-sm'}"
-                                style="${this.tipoSeleccionado === t.id ? `background:${t.color};color:white;--tw-ring-color:${t.color}` : `color:${t.color}`}">
-                                <span>${t.icono}</span><span class="text-sm font-medium">${t.nombre}</span>
-                            </button>
-                        `).join('')}
-                    </div>
-                </div>
-                <div class="px-4">
-                    <h2 class="font-semibold text-slate-900 mb-3">Productos recientes</h2>
-                    <div class="space-y-3">
-                        ${this.productos.slice(0, 10).map(p => this.renderProductCard(p)).join('')}
-                    </div>
-                    ${this.productos.length === 0 ? `
-                        <div class="text-center py-12">
-                            <div class="text-4xl mb-3">📸</div>
-                            <p class="text-slate-500">No hay productos aun</p>
-                            <p class="text-sm text-slate-400 mt-1">Toca el boton de camara para agregar uno</p>
-                        </div>
-                    ` : ''}
-                </div>
-            </div>
-        `;
-    }
+    static renderizarProductoCard(producto) {
+        const imagenHtml = producto.foto_thumbnail || producto.foto_url
+            ? `<img src="${producto.foto_thumbnail || producto.foto_url}" alt="" class="w-full h-full object-cover" loading="lazy">`
+            : `<div class="w-full h-full flex items-center justify-center text-2xl">${producto.tipo_icono || CONSTANTS.THUMBNAIL_PLACEHOLDER}</div>`;
 
-    imagenProductoListado(p) {
-        const src = p.foto_thumbnail || p.foto_url;
-        return src
-            ? `<img src="${src}" alt="" class="w-full h-full object-cover" loading="lazy">`
-            : `<div class="w-full h-full flex items-center justify-center text-2xl">${p.tipo_icono || '📦'}</div>`;
-    }
-
-    renderProductCard(p) {
         return `
-            <div class="product-card bg-white rounded-2xl shadow-sm overflow-hidden" onclick="app.verProducto('${p.id}')">
+            <div class="product-card bg-white rounded-2xl shadow-sm overflow-hidden" onclick="app.verProducto('${producto.id}')">
                 <div class="flex">
                     <div class="w-24 h-24 flex-shrink-0 bg-slate-100">
-                        ${this.imagenProductoListado(p)}
+                        ${imagenHtml}
                     </div>
                     <div class="flex-1 p-3">
                         <div class="flex justify-between items-start">
                             <div>
-                                <h3 class="font-medium text-slate-900 text-sm line-clamp-1">${p.nombre}</h3>
-                                <p class="text-xs text-slate-500 mt-0.5">${p.tipo_nombre || 'Sin tipo'}</p>
+                                <h3 class="font-medium text-slate-900 text-sm line-clamp-1">${producto.nombre}</h3>
+                                <p class="text-xs text-slate-500 mt-0.5">${producto.tipo_nombre || 'Sin tipo'}</p>
                             </div>
-                            <span class="text-xs font-semibold" style="color:${p.tipo_color || '#64748b'}">${p.cantidad} u.</span>
+                            <span class="text-xs font-semibold" style="color:${producto.tipo_color || '#64748b'}">${producto.cantidad} u.</span>
                         </div>
                         <div class="flex justify-between items-end mt-2">
-                            <span class="text-sm font-bold text-slate-900">$${p.precio_unitario || 0}</span>
-                            <button onclick="event.stopPropagation(); app.eliminarProducto('${p.id}')" class="text-red-400 p-1">
+                            <span class="text-sm font-bold text-slate-900">$${producto.precio_unitario || 0}</span>
+                            <button onclick="event.stopPropagation(); app.eliminarProducto('${producto.id}')" class="text-red-400 p-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                             </button>
                         </div>
@@ -203,224 +476,315 @@ class InventarioApp {
             </div>
         `;
     }
+}
 
-    renderHistorial() {
+// ============================================================================
+// APLICACIÓN PRINCIPAL
+// ============================================================================
+
+class InventarioApp {
+    /**
+     * Orquestador principal de la aplicación.
+     */
+
+    constructor() {
+        this.storage = new StorageService();
+        this.sync = new SyncService(this.storage);
+        this.camera = new CameraManager();
+
+        this.productos = [];
+        this.tipos = [];
+        this.vistaActual = 'inicio';
+        this.tipoSeleccionado = null;
+        this.estaOnline = navigator.onLine;
+
+        this._setupCameraCallbacks();
+        this._setupEventListeners();
+    }
+
+    async inicializar() {
+        try {
+            await this.storage.init();
+            await this._cargarDatos();
+            this._actualizarEstadoUI();
+            this._renderizarVista('inicio');
+        } catch (error) {
+            console.error('Error inicializando:', error);
+            UIManager.mostrarToast('Error al inicializar la aplicación', 'error');
+        }
+    }
+
+    async _cargarDatos() {
+        try {
+            const [productos, tipos] = await Promise.all([
+                ApiService.getProductos(),
+                ApiService.getTipos(),
+            ]);
+
+            this.productos = productos;
+            this.tipos = tipos;
+        } catch (error) {
+            console.error('Error cargando datos:', error);
+        }
+    }
+
+    async _actualizarEstadoUI() {
+        UIManager.actualizarBadgeOffline(!this.estaOnline);
+
+        try {
+            const countPendientes = await this.sync.obtenerCountPendientes();
+            UIManager.actualizarBadgePendientes(countPendientes);
+        } catch (error) {
+            console.error('Error actualizando pendientes:', error);
+        }
+    }
+
+    _setupCameraCallbacks() {
+        this.camera.onFotoCapturada = (foto) => {
+            this._mostrarFormularioProducto(foto);
+        };
+
+        this.camera.onError = (error) => {
+            UIManager.mostrarToast(error, 'error');
+        };
+
+        this.camera.onStreamStarted = () => {
+            document.getElementById('camera-overlay').classList.add('active');
+        };
+
+        this.camera.onClosed = () => {
+            document.getElementById('camera-overlay').classList.remove('active');
+        };
+    }
+
+    _setupEventListeners() {
+        window.addEventListener('online', () => {
+            this.estaOnline = true;
+            UIManager.actualizarBadgeOffline(false);
+            UIManager.mostrarToast('Conexión restaurada', 'success');
+            this._sincronizarAutomatico();
+        });
+
+        window.addEventListener('offline', () => {
+            this.estaOnline = false;
+            UIManager.actualizarBadgeOffline(true);
+            UIManager.mostrarToast('Modo offline activado', 'warning');
+        });
+    }
+
+    // ====================================================================
+    // Navegación
+    // ====================================================================
+
+    cambiarVista(vista) {
+        this.vistaActual = vista;
+        UIManager.cambiarVista(vista);
+        this._renderizarVista(vista);
+    }
+
+    _renderizarVista(vista) {
         const container = document.getElementById('main-content');
+
+        if (vista === 'inicio') {
+            this._renderizarInicio(container);
+        } else if (vista === 'historial') {
+            this._renderizarHistorial(container);
+        }
+    }
+
+    async _renderizarInicio(container) {
+        try {
+            const stats = await ApiService.getEstadisticas();
+
+            container.innerHTML = `
+                <div class="fade-in">
+                    <div class="grid grid-cols-2 gap-4 p-4">
+                        <div class="bg-white rounded-2xl p-4 shadow-sm">
+                            <div class="text-2xl font-bold text-slate-900">${stats?.total_productos || 0}</div>
+                            <div class="text-xs text-slate-500 mt-1">Productos</div>
+                        </div>
+                        <div class="bg-white rounded-2xl p-4 shadow-sm">
+                            <div class="text-2xl font-bold text-slate-900">$${(stats?.valor_total || 0).toLocaleString()}</div>
+                            <div class="text-xs text-slate-500 mt-1">Valor total</div>
+                        </div>
+                    </div>
+
+                    <div class="px-4 mb-4">
+                        <div class="flex justify-between items-center mb-3">
+                            <h2 class="font-semibold text-slate-900">Categorías</h2>
+                            <button onclick="app.abrirModalTipo()" class="text-blue-500 text-sm font-medium">+ Nuevo</button>
+                        </div>
+                        <div class="flex space-x-3 overflow-x-auto hide-scrollbar pb-2">
+                            ${this._renderizarFiltrosTipo()}
+                        </div>
+                    </div>
+
+                    <div class="px-4">
+                        <h2 class="font-semibold text-slate-900 mb-3">Productos recientes</h2>
+                        <div class="space-y-3">
+                            ${this.productos.slice(0, CONSTANTS.PRODUCTOS_POR_PAGINA)
+                                .map(p => UIManager.renderizarProductoCard(p))
+                                .join('')}
+                        </div>
+                        ${this.productos.length === 0 ? `
+                            <div class="text-center py-12">
+                                <div class="text-4xl mb-3">📸</div>
+                                <p class="text-slate-500">No hay productos aún</p>
+                                <p class="text-sm text-slate-400 mt-1">Toca el botón de cámara para agregar uno</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            console.error('Error renderizando inicio:', error);
+            UIManager.mostrarToast('Error cargando datos', 'error');
+        }
+    }
+
+    _renderizarFiltrosTipo() {
+        const filtros = [
+            `<button onclick="app.filtrarPorTipo(null)"
+                class="tipo-chip flex-shrink-0 flex items-center space-x-2 px-4 py-2 rounded-full ${
+                    !this.tipoSeleccionado ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 shadow-sm'
+                }">
+                <span>📋</span><span class="text-sm font-medium">Todos</span>
+            </button>`,
+        ];
+
+        for (const tipo of this.tipos) {
+            const esActivo = this.tipoSeleccionado === tipo.id;
+            filtros.push(`
+                <button onclick="app.filtrarPorTipo('${tipo.id}')"
+                    class="tipo-chip flex-shrink-0 flex items-center space-x-2 px-4 py-2 rounded-full ${
+                        esActivo ? 'ring-2 ring-offset-2' : 'bg-white shadow-sm'
+                    }"
+                    style="${esActivo ? `background:${tipo.color};color:white;--tw-ring-color:${tipo.color}` : `color:${tipo.color}`}">
+                    <span>${tipo.icono}</span><span class="text-sm font-medium">${tipo.nombre}</span>
+                </button>
+            `);
+        }
+
+        return filtros.join('');
+    }
+
+    async _renderizarHistorial(container) {
         container.innerHTML = `
             <div class="fade-in p-4">
                 <h2 class="font-semibold text-slate-900 mb-4">Historial completo</h2>
-                <div class="space-y-3">${this.productos.map(p => this.renderProductCard(p)).join('')}</div>
+                <div class="space-y-3">
+                    ${this.productos
+                        .map(p => UIManager.renderizarProductoCard(p))
+                        .join('')}
+                </div>
             </div>
         `;
     }
 
-    cameraErrorMessage(err) {
-        if (!err) return 'No se pudo usar la camara';
-        switch (err.name) {
-            case 'NotAllowedError':
-            case 'PermissionDeniedError':
-                return 'Permiso de camara denegado; revisa los ajustes del navegador.';
-            case 'NotFoundError':
-            case 'DevicesNotFoundError':
-                return 'No se encontro ninguna camara en este dispositivo.';
-            case 'NotReadableError':
-            case 'TrackStartError':
-                return 'La camara esta en uso o no se puede abrir.';
-            case 'OverconstrainedError':
-                return 'La camara no admite el modo solicitado; prueba otra vez.';
-            case 'SecurityError':
-                return 'Conexion no segura: la camara del navegador requiere HTTPS.';
-            default:
-                return err.message || 'Error accediendo a la camara';
-        }
-    }
+    // ====================================================================
+    // Filtros
+    // ====================================================================
 
-    ensurePhotoFileInput() {
-        if (this._photoInput) return this._photoInput;
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.className = 'sr-only';
-        input.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;opacity:0;';
-        input.addEventListener('change', () => {
-            const file = input.files && input.files[0];
-            input.value = '';
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = () => {
-                this.fotoCapturada = reader.result;
-                this.renderFormularioProducto();
-            };
-            reader.onerror = () => this.showToast('No se pudo leer la imagen', 'error');
-            reader.readAsDataURL(file);
-        });
-        document.body.appendChild(input);
-        this._photoInput = input;
-        return input;
-    }
-
-    pickPhotoFromDevice() {
-        const input = this.ensurePhotoFileInput();
-        if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')) {
-            input.setAttribute('capture', 'environment');
-        } else {
-            input.removeAttribute('capture');
-        }
-        input.click();
-    }
-
-    async openCamera() {
-        const overlay = document.getElementById('camera-overlay');
-        const video = document.getElementById('camera-video');
-
-        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-            this.showToast('Tu navegador no permite la camara web aqui. Usa el selector de imagen.', 'warning');
-            setTimeout(() => {
-                if (confirm('Abrir galeria o archivos para elegir una foto?')) this.pickPhotoFromDevice();
-            }, 250);
-            return;
-        }
-
-        if (!window.isSecureContext) {
-            this.showToast('Con HTTP la camara del navegador esta bloqueada. Usa HTTPS (despliegue o tunel) o elige una foto.', 'warning');
-            this.pickPhotoFromDevice();
-            return;
-        }
-
-        const tries = [
-            { video: { facingMode: { ideal: 'environment' } }, audio: false },
-            { video: { facingMode: 'environment' }, audio: false },
-            { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
-            { video: true, audio: false }
-        ];
-
-        let lastErr;
-        for (const constraints of tries) {
-            try {
-                if (this.stream) {
-                    this.stream.getTracks().forEach(t => t.stop());
-                    this.stream = null;
-                }
-                this.stream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = this.stream;
-                video.muted = true;
-                try {
-                    await video.play();
-                } catch (_) { /* algunos moviles lanzan si no hay gesto previo */ }
-                overlay.classList.add('active');
-                document.getElementById('capture-preview').classList.add('hidden');
-                document.getElementById('camera-controls').classList.remove('hidden');
-                this.fotoCapturada = null;
-                return;
-            } catch (e) {
-                lastErr = e;
-            }
-        }
-
-        const msg = this.cameraErrorMessage(lastErr);
-        this.showToast(msg, 'error');
-        console.error(lastErr);
-        const denied = lastErr && (lastErr.name === 'NotAllowedError' || lastErr.name === 'PermissionDeniedError');
-        if (!denied) {
-            setTimeout(() => {
-                if (confirm('Quieres elegir una imagen desde la galeria o la camara del sistema?')) {
-                    this.pickPhotoFromDevice();
-                }
-            }, 300);
-        }
-    }
-
-    closeCamera(options = {}) {
-        const keepPhoto = options.keepPhoto === true;
-        const overlay = document.getElementById('camera-overlay');
-        if (this.stream) {
-            this.stream.getTracks().forEach(t => t.stop());
-            this.stream = null;
-        }
-        overlay.classList.remove('active');
-        if (!keepPhoto) this.fotoCapturada = null;
-    }
-
-    async waitForVideoFrame(video) {
-        if (video.readyState < 2) {
-            await new Promise(resolve => {
-                const done = () => resolve();
-                video.addEventListener('loadeddata', done, { once: true });
-                video.addEventListener('loadedmetadata', done, { once: true });
-                setTimeout(done, 2000);
-            });
-        }
-        for (let i = 0; i < 30 && (!video.videoWidth || !video.videoHeight); i++) {
-            await new Promise(r => requestAnimationFrame(r));
-        }
-        return video.videoWidth > 0 && video.videoHeight > 0;
-    }
-
-    async takePhoto() {
-        const video = document.getElementById('camera-video');
-        const canvas = document.getElementById('camera-canvas');
-        const preview = document.getElementById('capture-preview');
-        const previewImg = document.getElementById('preview-img');
-        const ready = await this.waitForVideoFrame(video);
-        if (!ready) {
-            this.showToast('La camara aun no esta lista. Espera un segundo e intenta otra vez.', 'warning');
-            return;
-        }
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
+    async filtrarPorTipo(tipoId) {
+        this.tipoSeleccionado = tipoId;
         try {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        } catch (e) {
-            console.error(e);
-            this.showToast('No se pudo capturar la imagen. Prueba repetir o elegir foto.', 'error');
-            return;
+            this.productos = await ApiService.getProductos({
+                tipo_id: tipoId,
+            });
+            this._renderizarVista('inicio');
+        } catch (error) {
+            console.error('Error filtrando:', error);
+            UIManager.mostrarToast('Error filtrando productos', 'error');
         }
-        this.fotoCapturada = canvas.toDataURL('image/jpeg', 0.85);
-        if (!this.fotoCapturada || this.fotoCapturada.length < 200) {
-            this.showToast('Captura vacia. Espera a ver la imagen en pantalla y vuelve a intentar.', 'warning');
-            this.fotoCapturada = null;
-            return;
-        }
-        previewImg.src = this.fotoCapturada;
-        preview.classList.remove('hidden');
-        document.getElementById('camera-controls').classList.add('hidden');
     }
 
-    retakePhoto() {
+    async buscar(query) {
+        if (!query) {
+            await this._cargarDatos();
+            this._renderizarVista(this.vistaActual);
+            return;
+        }
+
+        try {
+            this.productos = await ApiService.getProductos({ q: query });
+            this._renderizarVista('inicio');
+        } catch (error) {
+            console.error('Error buscando:', error);
+            UIManager.mostrarToast('Error buscando productos', 'error');
+        }
+    }
+
+    buscarToggle() {
+        const bar = document.getElementById('search-bar');
+        bar.classList.toggle('hidden');
+        if (!bar.classList.contains('hidden')) {
+            document.getElementById('search-input').focus();
+        }
+    }
+
+    // ====================================================================
+    // Cámara y Fotos
+    // ====================================================================
+
+    abrirCamara() {
+        this.camera.abrirCamara();
+    }
+
+    cerrarCamara(guardarFoto = false) {
+        this.camera.cerrar();
+        if (!guardarFoto) {
+            this.camera.fotoCapturada = null;
+        }
+    }
+
+    capturarFoto() {
+        this.camera.capturarFoto();
+    }
+
+    repetirFoto() {
+        this.camera.fotoCapturada = null;
         document.getElementById('capture-preview').classList.add('hidden');
         document.getElementById('camera-controls').classList.remove('hidden');
-        this.fotoCapturada = null;
     }
 
-    confirmPhoto() {
-        if (!this.fotoCapturada) {
-            this.showToast('Primero captura una foto', 'warning');
+    confirmarFoto() {
+        if (!this.camera.fotoCapturada) {
+            UIManager.mostrarToast('Primero captura una foto', 'warning');
             return;
         }
-        this.closeCamera({ keepPhoto: true });
-        this.renderFormularioProducto();
+        this.cerrarCamara(true);
+        this._mostrarFormularioProducto(this.camera.fotoCapturada);
     }
 
-    renderFormularioProducto() {
+    // ====================================================================
+    // Formulario de Producto
+    // ====================================================================
+
+    _mostrarFormularioProducto(fotoBase64) {
         const container = document.getElementById('main-content');
+
         container.innerHTML = `
             <div class="fade-in p-4 pb-24">
                 <div class="flex items-center space-x-3 mb-4">
-                    <button onclick="app.nav('inicio')" class="p-2 -ml-2">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    <button onclick="app.cambiarVista('inicio')" class="p-2 -ml-2">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                        </svg>
                     </button>
                     <h2 class="font-bold text-lg">Nuevo producto</h2>
                 </div>
+
                 <div class="bg-white rounded-2xl overflow-hidden mb-4 shadow-sm">
-                    <img src="${this.fotoCapturada}" class="w-full h-48 object-cover">
+                    <img src="${fotoBase64}" class="w-full h-48 object-cover">
                 </div>
-                <div class="space-y-4">
+
+                <form id="product-form" class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-slate-700 mb-1">Nombre *</label>
                         <input type="text" id="form-nombre" placeholder="Ej: Laptop Dell Latitude"
                             class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
+
                     <div class="grid grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-slate-700 mb-1">Cantidad</label>
@@ -433,36 +797,39 @@ class InventarioApp {
                                 class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
                         </div>
                     </div>
+
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-1">Codigo de barras</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Código de barras</label>
                         <input type="text" id="form-codigo" placeholder="Escanea o escribe"
                             class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
+
                     <div>
                         <label class="block text-sm font-medium text-slate-700 mb-1">Tipo *</label>
                         <div class="flex flex-wrap gap-2">
-                            ${this.tipos.map(t => `
-                                <button onclick="app.seleccionarTipoForm('${t.id}')" 
-                                    id="tipo-form-${t.id}"
+                            ${this.tipos.map(tipo => `
+                                <button type="button" onclick="app.seleccionarTipoForm('${tipo.id}')"
+                                    id="tipo-form-${tipo.id}"
                                     class="tipo-form-btn flex items-center space-x-1 px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm hover:bg-slate-200 transition">
-                                    <span>${t.icono}</span><span>${t.nombre}</span>
+                                    <span>${tipo.icono}</span><span>${tipo.nombre}</span>
                                 </button>
                             `).join('')}
-                            <button onclick="app.abrirModalTipoDesdeForm()" 
+                            <button type="button" onclick="app.abrirModalTipo()"
                                 class="flex items-center space-x-1 px-3 py-2 rounded-lg border-2 border-dashed border-blue-300 text-blue-500 text-sm hover:bg-blue-50 transition">
                                 <span>+</span><span>Nuevo tipo</span>
                             </button>
                         </div>
                         <input type="hidden" id="form-tipo-id">
-                        <input type="hidden" id="form-nuevo-tipo">
                     </div>
+
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-1">Descripcion</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Descripción</label>
                         <textarea id="form-descripcion" rows="2" placeholder="Opcional"
                             class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
                     </div>
-                </div>
-                <button onclick="app.guardarProducto()" 
+                </form>
+
+                <button onclick="app.guardarProducto('${fotoBase64}')"
                     class="w-full mt-6 bg-blue-500 text-white font-semibold py-4 rounded-xl shadow-lg shadow-blue-500/30 active:scale-95 transition">
                     Guardar Producto
                 </button>
@@ -475,273 +842,267 @@ class InventarioApp {
             btn.classList.remove('bg-blue-500', 'text-white');
             btn.classList.add('bg-slate-100', 'text-slate-600');
         });
+
         const selected = document.getElementById(`tipo-form-${tipoId}`);
         if (selected) {
             selected.classList.remove('bg-slate-100', 'text-slate-600');
             selected.classList.add('bg-blue-500', 'text-white');
         }
+
         document.getElementById('form-tipo-id').value = tipoId;
-        document.getElementById('form-nuevo-tipo').value = '';
     }
 
-    abrirModalTipoDesdeForm() {
-        this.abrirModalTipo();
-        this.tipoSeleccionadoCallback = (tipo) => {
-            this.tipos.push(tipo);
-            this.renderFormularioProducto();
-            setTimeout(() => this.seleccionarTipoForm(tipo.id), 100);
-        };
-    }
-
-    async guardarProducto() {
+    async guardarProducto(fotoBase64) {
         const nombre = document.getElementById('form-nombre').value.trim();
         const cantidad = parseInt(document.getElementById('form-cantidad').value) || 1;
         const precio = parseFloat(document.getElementById('form-precio').value) || null;
         const codigo = document.getElementById('form-codigo').value;
         const tipoId = document.getElementById('form-tipo-id').value;
-        const nuevoTipo = document.getElementById('form-nuevo-tipo').value;
         const descripcion = document.getElementById('form-descripcion').value;
 
-        if (!nombre) { this.showToast('El nombre es obligatorio', 'warning'); return; }
-        if (!tipoId && !nuevoTipo) { this.showToast('Selecciona o crea un tipo', 'warning'); return; }
-        if (!this.fotoCapturada) { this.showToast('Falta la foto del producto', 'warning'); return; }
+        if (!nombre) {
+            UIManager.mostrarToast('El nombre es obligatorio', 'warning');
+            return;
+        }
+
+        if (!tipoId) {
+            UIManager.mostrarToast('Selecciona un tipo', 'warning');
+            return;
+        }
 
         const producto = {
-            nombre, cantidad, precio_unitario: precio,
-            codigo_barras: codigo, descripcion,
-            tipo_producto_id: tipoId || null,
-            nuevo_tipo_nombre: nuevoTipo || null,
-            foto_base64: this.fotoCapturada,
-            texto_ocr: ''
+            nombre,
+            cantidad,
+            precio_unitario: precio,
+            codigo_barras: codigo,
+            descripcion,
+            tipo_producto_id: tipoId,
+            foto_base64: fotoBase64,
         };
 
-        if (this.isOnline) {
-            try {
-                const formData = new FormData();
-                Object.keys(producto).forEach(k => { if (producto[k] !== null) formData.append(k, producto[k]); });
-                const response = await fetch(`${API_BASE}/api/productos`, { method: 'POST', body: formData });
-                if (response.ok) {
-                    const data = await response.json();
-                    this.productos.unshift(data);
-                    this.showToast('Producto guardado', 'success');
-                    this.fotoCapturada = null;
-                    this.nav('inicio');
-                } else {
-                    let msg = 'No se pudo guardar el producto';
-                    try {
-                        const err = await response.json();
-                        if (err && err.error) msg = err.error;
-                    } catch (_) { /* ignore */ }
-                    this.showToast(msg, 'error');
-                }
-            } catch (e) {
-                await this.guardarOffline(producto);
-            }
-        } else { await this.guardarOffline(producto); }
+        if (this.estaOnline) {
+            await this._guardarEnServidor(producto);
+        } else {
+            await this._guardarOffline(producto);
+        }
     }
 
-    async guardarOffline(producto) {
-        await this.guardarPendiente(producto);
-        this.showToast('Guardado offline - se sincronizara luego', 'info');
-        this.fotoCapturada = null;
-        this.nav('inicio');
-    }
-
-    async syncManual() {
-        if (!this.isOnline) { this.showToast('Sin conexion', 'warning'); return; }
-        await this.syncAutomatico();
-    }
-
-    async syncAutomatico() {
-        const pendientes = await this.getPendientes();
-        if (pendientes.length === 0) return;
-        this.showToast(`Sincronizando ${pendientes.length} productos...`, 'info');
+    async _guardarEnServidor(producto) {
         try {
-            const response = await fetch(`${API_BASE}/api/sync`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ productos: pendientes })
+            const formData = new FormData();
+            Object.entries(producto).forEach(([clave, valor]) => {
+                if (valor !== null) formData.append(clave, valor);
             });
-            if (response.ok) {
-                await this.limpiarPendientes();
-                await this.cargarDatos();
-                this.showToast('Sincronizacion completa', 'success');
-                if (this.currentView === 'inicio') this.renderInicio();
-            }
-        } catch (e) { this.showToast('Error en sincronizacion', 'error'); }
+
+            const respuesta = await ApiService.crearProducto(formData);
+            this.productos.unshift(respuesta);
+            UIManager.mostrarToast('Producto guardado', 'success');
+            this.camera.fotoCapturada = null;
+            this.cambiarVista('inicio');
+        } catch (error) {
+            console.error('Error guardando en servidor:', error);
+            await this._guardarOffline(producto);
+        }
     }
 
-    updatePendingCount() {
-        const badge = document.getElementById('pending-count');
-        if (this.pendientes.length > 0) {
-            badge.textContent = this.pendientes.length;
-            badge.classList.remove('hidden');
-        } else { badge.classList.add('hidden'); }
+    async _guardarOffline(producto) {
+        try {
+            await this.storage.guardarPendiente(producto);
+            await this._actualizarEstadoUI();
+            UIManager.mostrarToast('Guardado offline - se sincronizará luego', 'info');
+            this.camera.fotoCapturada = null;
+            this.cambiarVista('inicio');
+        } catch (error) {
+            console.error('Error guardando offline:', error);
+            UIManager.mostrarToast('Error guardando producto', 'error');
+        }
     }
+
+    // ====================================================================
+    // Tipos de Productos
+    // ====================================================================
 
     abrirModalTipo() {
-        document.getElementById('modal-tipo').classList.remove('hidden');
+        UIManager.abrirModal('modal-tipo');
         document.getElementById('nuevo-tipo-nombre').value = '';
-        this.iconoSeleccionado = '📦';
+    }
+
+    cerrarModalTipo() {
+        UIManager.cerrarModal('modal-tipo');
+    }
+
+    seleccionarIcono(boton, icono) {
         document.querySelectorAll('.icon-btn').forEach(btn => {
             btn.classList.remove('bg-blue-500', 'text-white');
             btn.classList.add('bg-slate-100');
         });
-    }
 
-    cerrarModalTipo() { document.getElementById('modal-tipo').classList.add('hidden'); }
+        boton.classList.remove('bg-slate-100');
+        boton.classList.add('bg-blue-500', 'text-white');
 
-    selectIcon(btn, icon) {
-        this.iconoSeleccionado = icon;
-        document.querySelectorAll('.icon-btn').forEach(b => {
-            b.classList.remove('bg-blue-500', 'text-white');
-            b.classList.add('bg-slate-100');
-        });
-        btn.classList.remove('bg-slate-100');
-        btn.classList.add('bg-blue-500', 'text-white');
+        this.iconoActual = icono;
     }
 
     async guardarNuevoTipo() {
         const nombre = document.getElementById('nuevo-tipo-nombre').value.trim();
-        if (!nombre) { this.showToast('Escribe un nombre', 'warning'); return; }
-        const tipo = { nombre, descripcion: 'Creado desde app', icono: this.iconoSeleccionado, color: '#3b82f6' };
+        if (!nombre) {
+            UIManager.mostrarToast('Escribe un nombre', 'warning');
+            return;
+        }
+
         try {
-            const response = await fetch(`${API_BASE}/api/tipos-producto`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(tipo)
-            });
-            if (response.ok) {
-                const nuevoTipo = await response.json();
-                this.tipos.push(nuevoTipo);
-                this.cerrarModalTipo();
-                this.showToast('Tipo creado', 'success');
-                if (this.tipoSeleccionadoCallback) {
-                    this.tipoSeleccionadoCallback(nuevoTipo);
-                    this.tipoSeleccionadoCallback = null;
-                } else { this.renderInicio(); }
+            const nuevoTipo = await ApiService.crearTipo(nombre, 'Creado desde app', this.iconoActual || '📦');
+            this.tipos.push(nuevoTipo);
+            this.cerrarModalTipo();
+            UIManager.mostrarToast('Tipo creado', 'success');
+            this._renderizarVista(this.vistaActual);
+        } catch (error) {
+            console.error('Error creando tipo:', error);
+            UIManager.mostrarToast('Error creando tipo', 'error');
+        }
+    }
+
+    // ====================================================================
+    // Vista de Producto
+    // ====================================================================
+
+    async verProducto(productoId) {
+        try {
+            const producto = await ApiService.getProducto(productoId);
+            const container = document.getElementById('main-content');
+            const urlFoto = producto.foto_url || producto.foto_thumbnail;
+
+            container.innerHTML = `
+                <div class="fade-in">
+                    <div class="relative">
+                        ${urlFoto
+                            ? `<img src="${urlFoto}" alt="" class="w-full h-64 object-cover">`
+                            : `<div class="w-full h-64 bg-slate-100 flex items-center justify-center text-6xl">${producto.tipo_icono || CONSTANTS.THUMBNAIL_PLACEHOLDER}</div>`
+                        }
+                        <button onclick="app.cambiarVista('inicio')" class="absolute top-4 left-4 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div class="p-4">
+                        <div class="flex items-center space-x-2 mb-2">
+                            <span class="px-3 py-1 rounded-full text-xs font-medium" style="background:${producto.tipo_color}20;color:${producto.tipo_color}">
+                                ${producto.tipo_icono} ${producto.tipo_nombre}
+                            </span>
+                        </div>
+
+                        <h1 class="text-2xl font-bold text-slate-900">${producto.nombre}</h1>
+                        <p class="text-slate-500 mt-1">${producto.descripcion || 'Sin descripción'}</p>
+
+                        <div class="grid grid-cols-3 gap-4 mt-6">
+                            <div class="bg-white rounded-xl p-3 text-center shadow-sm">
+                                <div class="text-xl font-bold text-slate-900">${producto.cantidad}</div>
+                                <div class="text-xs text-slate-500">Unidades</div>
+                            </div>
+                            <div class="bg-white rounded-xl p-3 text-center shadow-sm">
+                                <div class="text-xl font-bold text-slate-900">$${producto.precio_unitario || 0}</div>
+                                <div class="text-xs text-slate-500">Precio</div>
+                            </div>
+                            <div class="bg-white rounded-xl p-3 text-center shadow-sm">
+                                <div class="text-xl font-bold text-slate-900">$${(producto.cantidad * (producto.precio_unitario || 0)).toFixed(2)}</div>
+                                <div class="text-xs text-slate-500">Total</div>
+                            </div>
+                        </div>
+
+                        ${producto.codigo_barras ? `
+                            <div class="mt-4 p-3 bg-slate-100 rounded-xl">
+                                <div class="text-xs text-slate-500 mb-1">Código de barras</div>
+                                <div class="font-mono text-sm">${producto.codigo_barras}</div>
+                            </div>
+                        ` : ''}
+
+                        <button onclick="app.eliminarProducto('${producto.id}')"
+                            class="w-full mt-6 bg-red-50 text-red-500 font-semibold py-3 rounded-xl border border-red-200">
+                            Eliminar Producto
+                        </button>
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            console.error('Error obteniendo producto:', error);
+            UIManager.mostrarToast('Error cargando producto', 'error');
+        }
+    }
+
+    // ====================================================================
+    // Eliminar Producto
+    // ====================================================================
+
+    async eliminarProducto(productoId) {
+        if (!confirm('¿Eliminar este producto?')) return;
+
+        try {
+            await ApiService.eliminarProducto(productoId);
+            this.productos = this.productos.filter(p => p.id !== productoId);
+            UIManager.mostrarToast('Producto eliminado', 'info');
+
+            if (this.vistaActual === 'inicio') {
+                this._renderizarVista('inicio');
+            } else {
+                this._renderizarVista('historial');
             }
-        } catch (e) { this.showToast('Error creando tipo', 'error'); }
+        } catch (error) {
+            console.error('Error eliminando:', error);
+            UIManager.mostrarToast('Error eliminando producto', 'error');
+        }
     }
 
-    filtrarTipo(tipoId) {
-        this.tipoSeleccionado = tipoId;
-        this.cargarProductos();
-        this.renderInicio();
+    // ====================================================================
+    // Sincronización
+    // ====================================================================
+
+    async sincronizarManual() {
+        if (!this.estaOnline) {
+            UIManager.mostrarToast('Sin conexión', 'warning');
+            return;
+        }
+
+        await this._sincronizarAutomatico();
     }
 
-    async eliminarProducto(id) {
-        if (!confirm('Eliminar este producto?')) return;
+    async _sincronizarAutomatico() {
         try {
-            await fetch(`${API_BASE}/api/productos/${id}`, { method: 'DELETE' });
-            this.productos = this.productos.filter(p => p.id !== id);
-            this.showToast('Producto eliminado', 'info');
-            if (this.currentView === 'inicio') this.renderInicio();
-            else this.renderHistorial();
-        } catch (e) { this.showToast('Error eliminando', 'error'); }
-    }
+            const pendientes = await this.sync.obtenerPendientes();
+            if (pendientes.length === 0) return;
 
-    verProducto(id) {
-        const p = this.productos.find(x => x.id === id);
-        if (!p) return;
-        const container = document.getElementById('main-content');
-        const fotoDetalle = p.foto_url || p.foto_thumbnail;
-        container.innerHTML = `
-            <div class="fade-in">
-                <div class="relative">
-                    ${fotoDetalle ? `<img src="${fotoDetalle}" alt="" class="w-full h-64 object-cover">` :
-                        `<div class="w-full h-64 bg-slate-100 flex items-center justify-center text-6xl">${p.tipo_icono || '📦'}</div>`}
-                    <button onclick="app.nav('inicio')" class="absolute top-4 left-4 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-                    </button>
-                </div>
-                <div class="p-4">
-                    <div class="flex items-center space-x-2 mb-2">
-                        <span class="px-3 py-1 rounded-full text-xs font-medium" style="background:${p.tipo_color}20;color:${p.tipo_color}">
-                            ${p.tipo_icono} ${p.tipo_nombre}
-                        </span>
-                    </div>
-                    <h1 class="text-2xl font-bold text-slate-900">${p.nombre}</h1>
-                    <p class="text-slate-500 mt-1">${p.descripcion || 'Sin descripcion'}</p>
-                    <div class="grid grid-cols-3 gap-4 mt-6">
-                        <div class="bg-white rounded-xl p-3 text-center shadow-sm">
-                            <div class="text-xl font-bold text-slate-900">${p.cantidad}</div>
-                            <div class="text-xs text-slate-500">Unidades</div>
-                        </div>
-                        <div class="bg-white rounded-xl p-3 text-center shadow-sm">
-                            <div class="text-xl font-bold text-slate-900">$${p.precio_unitario || 0}</div>
-                            <div class="text-xs text-slate-500">Precio</div>
-                        </div>
-                        <div class="bg-white rounded-xl p-3 text-center shadow-sm">
-                            <div class="text-xl font-bold text-slate-900">$${(p.cantidad * (p.precio_unitario || 0)).toFixed(2)}</div>
-                            <div class="text-xs text-slate-500">Total</div>
-                        </div>
-                    </div>
-                    ${p.codigo_barras ? `
-                        <div class="mt-4 p-3 bg-slate-100 rounded-xl">
-                            <div class="text-xs text-slate-500 mb-1">Codigo de barras</div>
-                            <div class="font-mono text-sm">${p.codigo_barras}</div>
-                        </div>
-                    ` : ''}
-                    <button onclick="app.eliminarProducto('${p.id}')" 
-                        class="w-full mt-6 bg-red-50 text-red-500 font-semibold py-3 rounded-xl border border-red-200">
-                        Eliminar Producto
-                    </button>
-                </div>
-            </div>
-        `;
-    }
+            UIManager.mostrarToast(`Sincronizando ${pendientes.length} productos...`, 'info');
 
-    buscarToggle() {
-        const bar = document.getElementById('search-bar');
-        bar.classList.toggle('hidden');
-        if (!bar.classList.contains('hidden')) document.getElementById('search-input').focus();
-    }
+            const resultado = await this.sync.sincronizar();
+            await this._cargarDatos();
+            await this._actualizarEstadoUI();
 
-    async buscar(query) {
-        if (!query) { await this.cargarProductos(); this.renderInicio(); return; }
-        try {
-            const response = await fetch(`${API_BASE}/api/productos?q=${encodeURIComponent(query)}`);
-            this.productos = await response.json();
-            this.renderInicio();
-        } catch (e) { console.error(e); }
-    }
+            UIManager.mostrarToast('Sincronización completa', 'success');
 
-    async fetchData(endpoint) {
-        try {
-            const response = await fetch(`${API_BASE}${endpoint}`);
-            if (response.ok) return await response.json();
-        } catch (e) { console.error(`Error fetching ${endpoint}:`, e); }
-        return null;
-    }
-
-    async cargarDatos() {
-        await Promise.all([this.cargarProductos(), this.cargarTipos()]);
-    }
-
-    async cargarProductos() {
-        const url = this.tipoSeleccionado ? `/api/productos?tipo_id=${this.tipoSeleccionado}` : '/api/productos';
-        const data = await this.fetchData(url);
-        if (data) this.productos = data;
-        return this.productos;
-    }
-
-    async cargarTipos() {
-        const data = await this.fetchData('/api/tipos-producto');
-        if (data) this.tipos = data;
-        return this.tipos;
-    }
-
-    showToast(message, type = 'info') {
-        const toast = document.getElementById('toast');
-        const iconMap = { success: '✅', error: '❌', warning: '⚠️', info: '💡' };
-        document.getElementById('toast-icon').textContent = iconMap[type] || '💡';
-        document.getElementById('toast-message').textContent = message;
-        toast.classList.remove('-translate-y-20', 'opacity-0');
-        toast.classList.add('translate-y-0', 'opacity-100');
-        setTimeout(() => {
-            toast.classList.add('-translate-y-20', 'opacity-0');
-            toast.classList.remove('translate-y-0', 'opacity-100');
-        }, 3000);
+            if (this.vistaActual === 'inicio') {
+                this._renderizarVista('inicio');
+            }
+        } catch (error) {
+            console.error('Error sincronizando:', error);
+            UIManager.mostrarToast('Error en sincronización', 'error');
+        }
     }
 }
 
+// ============================================================================
+// INICIALIZACIÓN
+// ============================================================================
+
 const app = new InventarioApp();
+
+document.addEventListener('DOMContentLoaded', () => {
+    app.inicializar();
+});
+
+// Registrar Service Worker
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(error => {
+        console.warn('Service Worker no registrado:', error);
+    });
+}
