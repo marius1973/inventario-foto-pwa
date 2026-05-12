@@ -1114,64 +1114,57 @@ if ('serviceWorker' in navigator) {
  * Configura event listeners para mejor compatibilidad en iOS
  */
 function setupiOSCompatibility() {
-    // Delegación de eventos para botones de navegación
+    // Hacer que los métodos de app sean accesibles globalmente (para onclick)
+    window.app = app;
+
+    // Delegación de eventos para TODA la página
+    document.addEventListener('touchstart', () => {}, false);
+
+    // Delegación de clicks en botones de navegación
     document.addEventListener('click', (e) => {
-        const navBtn = e.target.closest('[data-view]');
-        if (navBtn) {
-            const view = navBtn.dataset.view;
-            if (view) {
-                e.preventDefault();
-                app.cambiarVista(view);
+        const btn = e.target.closest('button');
+        if (!btn) return;
+
+        // Botones de navegación (data-view)
+        if (btn.dataset.view) {
+            app.cambiarVista(btn.dataset.view);
+            return;
+        }
+
+        // Búsqueda
+        if (btn.textContent.includes('🔍') || btn.onclick?.toString().includes('buscarToggle')) {
+            app.buscarToggle();
+            return;
+        }
+
+        // Sync
+        if (btn.textContent.includes('🔄') || btn.id === 'sync-btn') {
+            app.syncManual();
+            return;
+        }
+
+        // Cámara
+        if (btn.textContent.includes('📷') || btn.classList.contains('bg-blue-500')) {
+            if (btn.closest('nav')) {
+                app.abrirCamara();
+                return;
             }
         }
-    });
 
-    // Botón de cámara
-    const cameraBtn = document.querySelector('button[onclick*="openCamera"]');
-    if (cameraBtn) {
-        cameraBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            app.abrirCamara();
-        });
-    }
-
-    // Botón de búsqueda
-    const searchBtn = document.querySelector('button[onclick*="buscarToggle"]');
-    if (searchBtn) {
-        searchBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            app.buscarToggle();
-        });
-    }
-
-    // Botón de sync
-    const syncBtn = document.querySelector('button[onclick*="syncManual"]');
-    if (syncBtn) {
-        syncBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            app.sincronizarManual();
-        });
-    }
-
-    // Modal de tipo - botón Crear
-    document.addEventListener('click', (e) => {
-        if (e.target.textContent.trim() === 'Crear' &&
-            e.target.closest('#modal-tipo')) {
-            e.preventDefault();
+        // Modal - Crear tipo
+        if (btn.textContent.trim() === 'Crear' && btn.closest('#modal-tipo')) {
             app.guardarNuevoTipo();
+            return;
         }
-    });
 
-    // Modal de tipo - botón Cancelar
-    document.addEventListener('click', (e) => {
-        if (e.target.textContent.trim() === 'Cancelar' &&
-            e.target.closest('#modal-tipo')) {
-            e.preventDefault();
+        // Modal - Cancelar
+        if (btn.textContent.trim() === 'Cancelar' && btn.closest('#modal-tipo')) {
             app.cerrarModalTipo();
+            return;
         }
     });
 
-    // Input de búsqueda con debounce
+    // Manejo de búsqueda con debounce
     const searchInput = document.getElementById('search-input');
     if (searchInput) {
         let searchTimeout;
@@ -1182,4 +1175,6 @@ function setupiOSCompatibility() {
             }, 300);
         });
     }
+
+    console.log('✅ iOS compatibility setup complete');
 }
