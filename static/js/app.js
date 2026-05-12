@@ -170,13 +170,19 @@ class InventarioApp {
         `;
     }
 
+    imagenProductoListado(p) {
+        const src = p.foto_thumbnail || p.foto_url;
+        return src
+            ? `<img src="${src}" alt="" class="w-full h-full object-cover" loading="lazy">`
+            : `<div class="w-full h-full flex items-center justify-center text-2xl">${p.tipo_icono || '📦'}</div>`;
+    }
+
     renderProductCard(p) {
         return `
             <div class="product-card bg-white rounded-2xl shadow-sm overflow-hidden" onclick="app.verProducto('${p.id}')">
                 <div class="flex">
                     <div class="w-24 h-24 flex-shrink-0 bg-slate-100">
-                        ${p.foto_thumbnail ? `<img src="${p.foto_thumbnail}" class="w-full h-full object-cover">` :
-                            `<div class="w-full h-full flex items-center justify-center text-2xl">${p.tipo_icono || '📦'}</div>`}
+                        ${this.imagenProductoListado(p)}
                     </div>
                     <div class="flex-1 p-3">
                         <div class="flex justify-between items-start">
@@ -324,26 +330,58 @@ class InventarioApp {
         }
     }
 
-    closeCamera() {
+    closeCamera(options = {}) {
+        const keepPhoto = options.keepPhoto === true;
         const overlay = document.getElementById('camera-overlay');
         if (this.stream) {
             this.stream.getTracks().forEach(t => t.stop());
             this.stream = null;
         }
         overlay.classList.remove('active');
-        this.fotoCapturada = null;
+        if (!keepPhoto) this.fotoCapturada = null;
     }
 
-    takePhoto() {
+    async waitForVideoFrame(video) {
+        if (video.readyState < 2) {
+            await new Promise(resolve => {
+                const done = () => resolve();
+                video.addEventListener('loadeddata', done, { once: true });
+                video.addEventListener('loadedmetadata', done, { once: true });
+                setTimeout(done, 2000);
+            });
+        }
+        for (let i = 0; i < 30 && (!video.videoWidth || !video.videoHeight); i++) {
+            await new Promise(r => requestAnimationFrame(r));
+        }
+        return video.videoWidth > 0 && video.videoHeight > 0;
+    }
+
+    async takePhoto() {
         const video = document.getElementById('camera-video');
         const canvas = document.getElementById('camera-canvas');
         const preview = document.getElementById('capture-preview');
         const previewImg = document.getElementById('preview-img');
+        const ready = await this.waitForVideoFrame(video);
+        if (!ready) {
+            this.showToast('La camara aun no esta lista. Espera un segundo e intenta otra vez.', 'warning');
+            return;
+        }
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0);
+        try {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        } catch (e) {
+            console.error(e);
+            this.showToast('No se pudo capturar la imagen. Prueba repetir o elegir foto.', 'error');
+            return;
+        }
         this.fotoCapturada = canvas.toDataURL('image/jpeg', 0.85);
+        if (!this.fotoCapturada || this.fotoCapturada.length < 200) {
+            this.showToast('Captura vacia. Espera a ver la imagen en pantalla y vuelve a intentar.', 'warning');
+            this.fotoCapturada = null;
+            return;
+        }
         previewImg.src = this.fotoCapturada;
         preview.classList.remove('hidden');
         document.getElementById('camera-controls').classList.add('hidden');
@@ -356,7 +394,11 @@ class InventarioApp {
     }
 
     confirmPhoto() {
-        this.closeCamera();
+        if (!this.fotoCapturada) {
+            this.showToast('Primero captura una foto', 'warning');
+            return;
+        }
+        this.closeCamera({ keepPhoto: true });
         this.renderFormularioProducto();
     }
 
@@ -462,6 +504,7 @@ class InventarioApp {
 
         if (!nombre) { this.showToast('El nombre es obligatorio', 'warning'); return; }
         if (!tipoId && !nuevoTipo) { this.showToast('Selecciona o crea un tipo', 'warning'); return; }
+        if (!this.fotoCapturada) { this.showToast('Falta la foto del producto', 'warning'); return; }
 
         const producto = {
             nombre, cantidad, precio_unitario: precio,
@@ -600,10 +643,11 @@ class InventarioApp {
         const p = this.productos.find(x => x.id === id);
         if (!p) return;
         const container = document.getElementById('main-content');
+        const fotoDetalle = p.foto_url || p.foto_thumbnail;
         container.innerHTML = `
             <div class="fade-in">
                 <div class="relative">
-                    ${p.foto_url ? `<img src="${p.foto_url}" class="w-full h-64 object-cover">` :
+                    ${fotoDetalle ? `<img src="${fotoDetalle}" alt="" class="w-full h-64 object-cover">` :
                         `<div class="w-full h-64 bg-slate-100 flex items-center justify-center text-6xl">${p.tipo_icono || '📦'}</div>`}
                     <button onclick="app.nav('inicio')" class="absolute top-4 left-4 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>

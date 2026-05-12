@@ -17,6 +17,7 @@ import io
 
 app = Flask(__name__)
 CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024
 
 UPLOAD_FOLDER = 'uploads/fotos'
 DATABASE = 'inventario.db'
