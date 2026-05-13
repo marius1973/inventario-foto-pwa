@@ -1,4 +1,4 @@
-const CACHE_NAME = 'inventario-v3';
+const CACHE_NAME = 'inventario-v4';
 const urlsToCache = ['/', '/static/js/app.js', '/static/manifest.json'];
 
 self.addEventListener('install', event => {

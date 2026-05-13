@@ -265,11 +265,11 @@ class CameraManager {
         return input;
     }
 
-    abrirGaleria() {
-        const input = this.criarInputFoto();
-
+    abrirGaleria(options = {}) {
+        const input = this.crearInputFoto();
         const esMovil = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-        if (esMovil) {
+        const forzarCamara = options.capture === true;
+        if (esMovil && forzarCamara) {
             input.setAttribute('capture', 'environment');
         } else {
             input.removeAttribute('capture');
@@ -280,12 +280,18 @@ class CameraManager {
 
     async abrirCamara() {
         if (!this._puedeLeerCamara()) {
-            this.onError?.('Tu navegador no permite usar la cámara');
+            this.onError?.('Tu navegador no permite usar la cámara aquí');
+            if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '')) {
+                setTimeout(() => this.abrirGaleria(), 200);
+            }
             return;
         }
 
         if (!window.isSecureContext) {
-            this.onError?.('Se requiere HTTPS para usar la cámara');
+            this.onError?.('Conexión no segura: usa HTTPS o elige una foto.');
+            if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '')) {
+                setTimeout(() => this.abrirGaleria(), 300);
+            }
             return;
         }
 
@@ -309,6 +315,9 @@ class CameraManager {
         }
 
         this.onError?.('No se pudo acceder a la cámara');
+        if (/iPhone|iPad|iPod/i.test(navigator.userAgent || '')) {
+            setTimeout(() => this.abrirGaleria(), 400);
+        }
     }
 
     _puedeLeerCamara() {
@@ -319,8 +328,11 @@ class CameraManager {
         this.stream = stream;
         const video = document.getElementById('camera-video');
         if (video) {
+            video.setAttribute('playsinline', '');
+            video.setAttribute('webkit-playsinline', '');
             video.srcObject = stream;
             video.muted = true;
+            video.playsInline = true;
             video.play().catch(() => {
                 // Algunos dispositivos requieren gesto del usuario
             });
@@ -335,9 +347,9 @@ class CameraManager {
         }
     }
 
-    cerrar() {
+    cerrar(conservarFoto = false) {
         this._detenerStream();
-        this.fotoCapturada = null;
+        if (!conservarFoto) this.fotoCapturada = null;
         this.onClosed?.();
     }
 
@@ -497,6 +509,7 @@ class InventarioApp {
         this.vistaActual = 'inicio';
         this.tipoSeleccionado = null;
         this.estaOnline = navigator.onLine;
+        this.iconoActual = '📦';
 
         this._setupCameraCallbacks();
         this._setupEventListeners();
@@ -540,8 +553,19 @@ class InventarioApp {
     }
 
     _setupCameraCallbacks() {
+        // Tras capturar: vista previa en overlay si la cámara está abierta; si no, ir al formulario (galería)
         this.camera.onFotoCapturada = (foto) => {
-            this._mostrarFormularioProducto(foto);
+            const overlay = document.getElementById('camera-overlay');
+            const preview = document.getElementById('capture-preview');
+            const previewImg = document.getElementById('preview-img');
+            const controls = document.getElementById('camera-controls');
+            if (overlay && overlay.classList.contains('active')) {
+                if (previewImg) previewImg.src = foto;
+                if (preview) preview.classList.remove('hidden');
+                if (controls) controls.classList.add('hidden');
+            } else {
+                this._mostrarFormularioProducto(foto);
+            }
         };
 
         this.camera.onError = (error) => {
@@ -549,11 +573,19 @@ class InventarioApp {
         };
 
         this.camera.onStreamStarted = () => {
-            document.getElementById('camera-overlay').classList.add('active');
+            const overlay = document.getElementById('camera-overlay');
+            const preview = document.getElementById('capture-preview');
+            const controls = document.getElementById('camera-controls');
+            if (overlay) overlay.classList.add('active');
+            if (preview) preview.classList.add('hidden');
+            if (controls) controls.classList.remove('hidden');
         };
 
         this.camera.onClosed = () => {
-            document.getElementById('camera-overlay').classList.remove('active');
+            const overlay = document.getElementById('camera-overlay');
+            const preview = document.getElementById('capture-preview');
+            if (overlay) overlay.classList.remove('active');
+            if (preview) preview.classList.add('hidden');
         };
     }
 
@@ -731,10 +763,7 @@ class InventarioApp {
     }
 
     cerrarCamara(guardarFoto = false) {
-        this.camera.cerrar();
-        if (!guardarFoto) {
-            this.camera.fotoCapturada = null;
-        }
+        this.camera.cerrar(guardarFoto);
     }
 
     capturarFoto() {
@@ -748,12 +777,13 @@ class InventarioApp {
     }
 
     confirmarFoto() {
-        if (!this.camera.fotoCapturada) {
+        const foto = this.camera.fotoCapturada;
+        if (!foto) {
             UIManager.mostrarToast('Primero captura una foto', 'warning');
             return;
         }
         this.cerrarCamara(true);
-        this._mostrarFormularioProducto(this.camera.fotoCapturada);
+        this._mostrarFormularioProducto(foto);
     }
 
     // ====================================================================
@@ -1088,6 +1118,39 @@ class InventarioApp {
             UIManager.mostrarToast('Error en sincronización', 'error');
         }
     }
+
+    // --- Compatibilidad con index.html (onclick en español / nombres antiguos) ---
+    nav(vista) {
+        this.cambiarVista(vista);
+    }
+
+    openCamera() {
+        this.abrirCamara();
+    }
+
+    closeCamera() {
+        this.cerrarCamara(false);
+    }
+
+    takePhoto() {
+        this.capturarFoto();
+    }
+
+    retakePhoto() {
+        this.repetirFoto();
+    }
+
+    confirmPhoto() {
+        this.confirmarFoto();
+    }
+
+    syncManual() {
+        this.sincronizarManual();
+    }
+
+    selectIcon(btn, icono) {
+        this.seleccionarIcono(btn, icono);
+    }
 }
 
 // ============================================================================
@@ -1114,67 +1177,6 @@ if ('serviceWorker' in navigator) {
  * Configura event listeners para mejor compatibilidad en iOS
  */
 function setupiOSCompatibility() {
-    // Hacer que los métodos de app sean accesibles globalmente (para onclick)
     window.app = app;
-
-    // Delegación de eventos para TODA la página
-    document.addEventListener('touchstart', () => {}, false);
-
-    // Delegación de clicks en botones de navegación
-    document.addEventListener('click', (e) => {
-        const btn = e.target.closest('button');
-        if (!btn) return;
-
-        // Botones de navegación (data-view)
-        if (btn.dataset.view) {
-            app.cambiarVista(btn.dataset.view);
-            return;
-        }
-
-        // Búsqueda
-        if (btn.textContent.includes('🔍') || btn.onclick?.toString().includes('buscarToggle')) {
-            app.buscarToggle();
-            return;
-        }
-
-        // Sync
-        if (btn.textContent.includes('🔄') || btn.id === 'sync-btn') {
-            app.syncManual();
-            return;
-        }
-
-        // Cámara
-        if (btn.textContent.includes('📷') || btn.classList.contains('bg-blue-500')) {
-            if (btn.closest('nav')) {
-                app.abrirCamara();
-                return;
-            }
-        }
-
-        // Modal - Crear tipo
-        if (btn.textContent.trim() === 'Crear' && btn.closest('#modal-tipo')) {
-            app.guardarNuevoTipo();
-            return;
-        }
-
-        // Modal - Cancelar
-        if (btn.textContent.trim() === 'Cancelar' && btn.closest('#modal-tipo')) {
-            app.cerrarModalTipo();
-            return;
-        }
-    });
-
-    // Manejo de búsqueda con debounce
-    const searchInput = document.getElementById('search-input');
-    if (searchInput) {
-        let searchTimeout;
-        searchInput.addEventListener('input', (e) => {
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                app.buscar(e.target.value);
-            }, 300);
-        });
-    }
-
-    console.log('✅ iOS compatibility setup complete');
+    document.addEventListener('touchstart', () => {}, { passive: true, capture: true });
 }

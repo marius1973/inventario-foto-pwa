@@ -12,8 +12,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
-        body { overscroll-behavior-y: none; }
-        .app-container { padding-bottom: 80px; }
+        body { overscroll-behavior-y: none; padding-bottom: env(safe-area-inset-bottom, 0px); }
+        .app-container { padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); }
         button { cursor: pointer; -webkit-user-select: none; user-select: none; }
         button:active { opacity: 0.8; }
         /* iOS fixes */
@@ -23,12 +23,13 @@
             -moz-appearance: none;
             appearance: none;
         }
-        nav { z-index: 40 !important; }
+        nav { z-index: 60 !important; padding-bottom: env(safe-area-inset-bottom, 0px); }
         .modal { z-index: 50 !important; }
         .camera-overlay {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: #000; z-index: 100; display: none;
         }
+        .camera-overlay:not(.active) { pointer-events: none; }
         .camera-overlay.active { display: flex; flex-direction: column; }
         .shutter-btn {
             width: 72px; height: 72px; border-radius: 50%;
@@ -98,7 +99,7 @@
     </div>
 
     <div id="camera-overlay" class="camera-overlay">
-        <video id="camera-video" autoplay playsinline muted class="flex-1 object-cover"></video>
+        <video id="camera-video" autoplay playsinline muted webkit-playsinline class="flex-1 object-cover"></video>
         <canvas id="camera-canvas" class="hidden"></canvas>
         <div id="capture-preview" class="hidden absolute inset-0 z-20 bg-black">
             <img id="preview-img" class="w-full h-full object-contain">
@@ -151,16 +152,16 @@
         </div>
     </div>
 
-    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40">
-        <div class="flex justify-around items-center h-16">
-            <button onclick="app.nav('inicio')" class="nav-btn flex flex-col items-center space-y-1 p-2 text-blue-500" data-view="inicio">
+    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-[60]">
+        <div class="flex justify-around items-center h-16 max-w-lg mx-auto">
+            <button type="button" onclick="app.nav('inicio')" class="nav-btn flex flex-col items-center space-y-1 p-2 text-blue-500" data-view="inicio">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
                 <span class="text-xs font-medium">Inicio</span>
             </button>
-            <button onclick="app.openCamera()" class="relative -top-5 bg-blue-500 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg shadow-blue-500/30 hover:scale-105 transition">
+            <button type="button" onclick="app.openCamera()" class="relative -top-5 bg-blue-500 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg shadow-blue-500/30 hover:scale-105 transition">
                 <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             </button>
-            <button onclick="app.nav('historial')" class="nav-btn flex flex-col items-center space-y-1 p-2 text-slate-400" data-view="historial">
+            <button type="button" onclick="app.nav('historial')" class="nav-btn flex flex-col items-center space-y-1 p-2 text-slate-400" data-view="historial">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
                 <span class="text-xs font-medium">Historial</span>
             </button>
