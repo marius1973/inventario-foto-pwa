@@ -523,7 +523,7 @@ class InventarioApp {
         this.tipoSeleccionado = null;
         this.estaOnline = navigator.onLine;
         this.iconoActual = '📦';
-        this.monedaSimbolo = '$'; // Valor por defecto
+        this.monedaSimbolo = 'S/'; // Valor por defecto
 
         this._setupCameraCallbacks();
         this._setupEventListeners();
