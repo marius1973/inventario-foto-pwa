@@ -109,7 +109,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) as count FROM configuracion")
     if cursor.fetchone()['count'] == 0:
         cursor.execute(
-            "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, '$')"
+            "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, 'S/.')"
         )
 
     conn.commit()
