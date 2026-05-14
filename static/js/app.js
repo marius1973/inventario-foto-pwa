@@ -535,10 +535,10 @@ class InventarioApp {
             // Cargar configuración (moneda)
             try {
                 const config = await ApiService.getConfig();
-                this.monedaSimbolo = config.moneda_simbolo || '$';
+                this.monedaSimbolo = config.moneda_simbolo || 'S/';
             } catch (error) {
                 console.warn('No se pudo cargar configuración, usando valor por defecto:', error);
-                this.monedaSimbolo = '$';
+                this.monedaSimbolo = 'S/';
             }
             await this._cargarDatos();
             this._actualizarEstadoUI();
