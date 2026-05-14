@@ -471,7 +471,7 @@ class UIManager {
         });
     }
 
-    static renderizarProductoCard(producto) {
+    static renderizarProductoCard(producto, monedaSimbolo = '$') {
         const imagenHtml = producto.foto_thumbnail || producto.foto_url
             ? `<img src="${producto.foto_thumbnail || producto.foto_url}" alt="" class="w-full h-full object-cover" loading="lazy">`
             : `<div class="w-full h-full flex items-center justify-center text-2xl">${producto.tipo_icono || CONSTANTS.THUMBNAIL_PLACEHOLDER}</div>`;
@@ -491,7 +491,7 @@ class UIManager {
                             <span class="text-xs font-semibold" style="color:${producto.tipo_color || '#64748b'}">${producto.cantidad} u.</span>
                         </div>
                         <div class="flex justify-between items-end mt-2">
-                            <span class="text-sm font-bold text-slate-900">${this.monedaSimbolo}${producto.precio_unitario || 0}</span>
+                            <span class="text-sm font-bold text-slate-900">${monedaSimbolo}${producto.precio_unitario || 0}</span>
                             <button onclick="event.stopPropagation(); app.eliminarProducto('${producto.id}')" class="text-red-400 p-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                             </button>
@@ -658,7 +658,7 @@ class InventarioApp {
                             <div class="text-xs text-slate-500 mt-1">Productos</div>
                         </div>
                         <div class="bg-white rounded-2xl p-4 shadow-sm">
-                            <div class="text-2xl font-bold text-slate-900">$${(stats?.valor_total || 0).toLocaleString()}</div>
+                            <div class="text-2xl font-bold text-slate-900">${this.monedaSimbolo}${(stats?.valor_total || 0).toLocaleString()}</div>
                             <div class="text-xs text-slate-500 mt-1">Valor total</div>
                         </div>
                     </div>
@@ -677,7 +677,7 @@ class InventarioApp {
                         <h2 class="font-semibold text-slate-900 mb-3">Productos recientes</h2>
                         <div class="space-y-3">
                             ${this.productos.slice(0, CONSTANTS.PRODUCTOS_POR_PAGINA)
-                                .map(p => UIManager.renderizarProductoCard(p))
+                                .map(p => UIManager.renderizarProductoCard(p, this.monedaSimbolo))
                                 .join('')}
                         </div>
                         ${this.productos.length === 0 ? `
@@ -728,7 +728,7 @@ class InventarioApp {
                 <h2 class="font-semibold text-slate-900 mb-4">Historial completo</h2>
                 <div class="space-y-3">
                     ${this.productos
-                        .map(p => UIManager.renderizarProductoCard(p))
+                        .map(p => UIManager.renderizarProductoCard(p, this.monedaSimbolo))
                         .join('')}
                 </div>
             </div>
