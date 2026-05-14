@@ -494,9 +494,9 @@ def sync_offline():
 # PUNTO DE ENTRADA
 # ============================================================================
 
-if __name__ == '__main__':
-    init_db()
+init_db()
 
+if __name__ == '__main__':
     print("=" * 70)
     print("INVENTARIO FOTO - Sistema de Inventario por Fotografía")
     print("=" * 70)
