@@ -179,7 +179,7 @@ def get_config():
 def update_config():
     """Actualiza la configuración de la aplicación."""
     data = request.get_json(silent=True) or {}
-    moneda_simbolo = (data.get('moneda_simbolo') or '$').strip()
+    moneda_simbolo = (data.get('moneda_simbolo') or 'S/').strip()
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("UPDATE configuracion SET moneda_simbolo = ? WHERE id = 1", (moneda_simbolo,))
