@@ -471,7 +471,7 @@ class UIManager {
         });
     }
 
-    static renderizarProductoCard(producto, monedaSimbolo = '$') {
+    static renderizarProductoCard(producto, monedaSimbolo = 'S/') {
         const imagenHtml = producto.foto_thumbnail || producto.foto_url
             ? `<img src="${producto.foto_thumbnail || producto.foto_url}" alt="" class="w-full h-full object-cover" loading="lazy">`
             : `<div class="w-full h-full flex items-center justify-center text-2xl">${producto.tipo_icono || CONSTANTS.THUMBNAIL_PLACEHOLDER}</div>`;

@@ -109,7 +109,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) as count FROM configuracion")
     if cursor.fetchone()['count'] == 0:
         cursor.execute(
-            "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, 'S/.')"
+            "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, 'S/')"
         )
 
     conn.commit()
@@ -172,7 +172,7 @@ def get_config():
     conn.close()
     if row:
         return jsonify({'moneda_simbolo': row['moneda_simbolo']})
-    return jsonify({'moneda_simbolo': '$'})
+    return jsonify({'moneda_simbolo': 'S/'})
 
 
 @app.route('/api/config', methods=['POST'])
