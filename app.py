@@ -83,7 +83,7 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracion (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            moneda_simbolo TEXT DEFAULT '$',
+            moneda_simbolo TEXT DEFAULT 'S/',
             fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
