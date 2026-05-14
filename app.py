@@ -105,11 +105,15 @@ def init_db():
             tipos_default
         )
 
-    # Insertar configuración por defecto
+    # Insertar o actualizar configuración por defecto
     cursor.execute("SELECT COUNT(*) as count FROM configuracion")
     if cursor.fetchone()['count'] == 0:
         cursor.execute(
             "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, 'S/')"
+        )
+    else:
+        cursor.execute(
+            "UPDATE configuracion SET moneda_simbolo = 'S/' WHERE id = 1 AND moneda_simbolo = '$'"
         )
 
     conn.commit()
