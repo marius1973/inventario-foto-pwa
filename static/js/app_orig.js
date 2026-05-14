@@ -103,19 +103,6 @@ class ApiService {
             body: JSON.stringify({ productos }),
         });
     }
-
-    // Configuración
-    static getConfig() {
-        return this.fetchJson('/api/config');
-    }
-
-    static updateConfig(moneda_simbolo) {
-        return this.fetchJson('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ moneda_simbolo }),
-        });
-    }
 }
 
 // ============================================================================
@@ -491,7 +478,7 @@ class UIManager {
                             <span class="text-xs font-semibold" style="color:${producto.tipo_color || '#64748b'}">${producto.cantidad} u.</span>
                         </div>
                         <div class="flex justify-between items-end mt-2">
-                            <span class="text-sm font-bold text-slate-900">${this.monedaSimbolo}${producto.precio_unitario || 0}</span>
+                            <span class="text-sm font-bold text-slate-900">$${producto.precio_unitario || 0}</span>
                             <button onclick="event.stopPropagation(); app.eliminarProducto('${producto.id}')" class="text-red-400 p-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                             </button>
@@ -523,7 +510,6 @@ class InventarioApp {
         this.tipoSeleccionado = null;
         this.estaOnline = navigator.onLine;
         this.iconoActual = '📦';
-        this.monedaSimbolo = '$'; // Valor por defecto
 
         this._setupCameraCallbacks();
         this._setupEventListeners();
@@ -532,14 +518,6 @@ class InventarioApp {
     async inicializar() {
         try {
             await this.storage.init();
-            // Cargar configuración (moneda)
-            try {
-                const config = await ApiService.getConfig();
-                this.monedaSimbolo = config.moneda_simbolo || '$';
-            } catch (error) {
-                console.warn('No se pudo cargar configuración, usando valor por defecto:', error);
-                this.monedaSimbolo = '$';
-            }
             await this._cargarDatos();
             this._actualizarEstadoUI();
             this._renderizarVista('inicio');
@@ -1054,11 +1032,11 @@ class InventarioApp {
                                 <div class="text-xs text-slate-500">Unidades</div>
                             </div>
                             <div class="bg-white rounded-xl p-3 text-center shadow-sm">
-                                <div class="text-xl font-bold text-slate-900">${this.monedaSimbolo}${producto.precio_unitario || 0}</div>
+                                <div class="text-xl font-bold text-slate-900">$${producto.precio_unitario || 0}</div>
                                 <div class="text-xs text-slate-500">Precio</div>
                             </div>
                             <div class="bg-white rounded-xl p-3 text-center shadow-sm">
-                                <div class="text-xl font-bold text-slate-900">${this.monedaSimbolo}${(producto.cantidad * (producto.precio_unitario || 0)).toFixed(2)}</div>
+                                <div class="text-xl font-bold text-slate-900">$${(producto.cantidad * (producto.precio_unitario || 0)).toFixed(2)}</div>
                                 <div class="text-xs text-slate-500">Total</div>
                             </div>
                         </div>

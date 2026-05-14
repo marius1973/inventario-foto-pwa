@@ -79,15 +79,6 @@ def init_db():
         )
     """)
 
-    # Crear tabla de configuración
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS configuracion (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            moneda_simbolo TEXT DEFAULT '$',
-            fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
     # Insertar tipos por defecto
     cursor.execute("SELECT COUNT(*) as count FROM tipos_producto")
     if cursor.fetchone()['count'] == 0:
@@ -103,13 +94,6 @@ def init_db():
         cursor.executemany(
             "INSERT INTO tipos_producto (id, nombre, descripcion, icono, color) VALUES (?, ?, ?, ?, ?)",
             tipos_default
-        )
-
-    # Insertar configuración por defecto
-    cursor.execute("SELECT COUNT(*) as count FROM configuracion")
-    if cursor.fetchone()['count'] == 0:
-        cursor.execute(
-            "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, '$')"
         )
 
     conn.commit()
@@ -156,36 +140,6 @@ def service_worker():
 @app.route('/uploads/fotos/<filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-
-# ============================================================================
-# API - CONFIGURACION
-# ============================================================================
-
-@app.route('/api/config', methods=['GET'])
-def get_config():
-    """Obtiene la configuración de la aplicación."""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT moneda_simbolo FROM configuracion WHERE id = 1")
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return jsonify({'moneda_simbolo': row['moneda_simbolo']})
-    return jsonify({'moneda_simbolo': '$'})
-
-
-@app.route('/api/config', methods=['POST'])
-def update_config():
-    """Actualiza la configuración de la aplicación."""
-    data = request.get_json(silent=True) or {}
-    moneda_simbolo = (data.get('moneda_simbolo') or '$').strip()
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE configuracion SET moneda_simbolo = ? WHERE id = 1", (moneda_simbolo,))
-    conn.commit()
-    conn.close()
-    return jsonify({'moneda_simbolo': moneda_simbolo}), 200
 
 
 # ============================================================================
