@@ -83,7 +83,7 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracion (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            moneda_simbolo TEXT DEFAULT '$',
+            moneda_simbolo TEXT DEFAULT 'S/',
             fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -109,7 +109,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) as count FROM configuracion")
     if cursor.fetchone()['count'] == 0:
         cursor.execute(
-            "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, '$')"
+            "INSERT INTO configuracion (id, moneda_simbolo) VALUES (1, 'S/')"
         )
 
     conn.commit()
@@ -172,14 +172,14 @@ def get_config():
     conn.close()
     if row:
         return jsonify({'moneda_simbolo': row['moneda_simbolo']})
-    return jsonify({'moneda_simbolo': '$'})
+    return jsonify({'moneda_simbolo': 'S/'})
 
 
 @app.route('/api/config', methods=['POST'])
 def update_config():
     """Actualiza la configuración de la aplicación."""
     data = request.get_json(silent=True) or {}
-    moneda_simbolo = (data.get('moneda_simbolo') or '$').strip()
+    moneda_simbolo = (data.get('moneda_simbolo') or 'S/').strip()
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("UPDATE configuracion SET moneda_simbolo = ? WHERE id = 1", (moneda_simbolo,))

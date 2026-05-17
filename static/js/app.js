@@ -471,7 +471,7 @@ class UIManager {
         });
     }
 
-    static renderizarProductoCard(producto, monedaSimbolo = '$') {
+    static renderizarProductoCard(producto, monedaSimbolo = 'S/') {
         const imagenHtml = producto.foto_thumbnail || producto.foto_url
             ? `<img src="${producto.foto_thumbnail || producto.foto_url}" alt="" class="w-full h-full object-cover" loading="lazy">`
             : `<div class="w-full h-full flex items-center justify-center text-2xl">${producto.tipo_icono || CONSTANTS.THUMBNAIL_PLACEHOLDER}</div>`;
@@ -523,7 +523,7 @@ class InventarioApp {
         this.tipoSeleccionado = null;
         this.estaOnline = navigator.onLine;
         this.iconoActual = '📦';
-        this.monedaSimbolo = '$'; // Valor por defecto
+        this.monedaSimbolo = 'S/'; // Valor por defecto
 
         this._setupCameraCallbacks();
         this._setupEventListeners();
@@ -535,10 +535,10 @@ class InventarioApp {
             // Cargar configuración (moneda)
             try {
                 const config = await ApiService.getConfig();
-                this.monedaSimbolo = config.moneda_simbolo || '$';
+                this.monedaSimbolo = config.moneda_simbolo || 'S/';
             } catch (error) {
                 console.warn('No se pudo cargar configuración, usando valor por defecto:', error);
-                this.monedaSimbolo = '$';
+                this.monedaSimbolo = 'S/';
             }
             await this._cargarDatos();
             this._actualizarEstadoUI();

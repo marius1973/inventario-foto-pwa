@@ -2,6 +2,11 @@
 
 > Sistema de inventario movil por fotografia. Toma una foto, registra el producto. Si no existe el tipo, lo creas al instante.
 
+# Arquitectura de InventarioFoto PWA
+
+![Arquitectura Completa](docs/arquitectura.png)
+
+
 ## Caracteristicas
 
 - **Captura fotografica**: Usa la camara del celular
