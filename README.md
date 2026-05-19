@@ -1,6 +1,27 @@
-# InventarioFoto
 
-> Sistema de inventario movil por fotografia. Toma una foto, registra el producto. Si no existe el tipo, lo creas al instante.
+# 📱 InventarioFoto PWA
+
+Sistema de gestión de inventario con fotos, offline-first. Toma una foto, registra el producto. Si no existe el tipo, lo creas al instante.
+
+## 🚀 Demo Live
+
+**Pruébalo aquí**: https://inventario-foto-pwa.onrender.com
+
+### Qué probar:
+1. Agrega items con fotos
+2. Desconecta internet
+3. Sigue usando la app (funciona offline)
+4. Reconecta → Sincroniza automáticamente
+
+## ⭐ Features
+
+- ✅ **Offline-first**: Funciona sin internet
+- ✅ **Sincronización inteligente**: Automática al reconectar
+- ✅ **Resolución de conflictos**: Last-write-wins con timestamps
+- ✅ **Búsqueda rápida**: Con fotos
+- ✅ **Instalable**: PWA completa
+
+
 
 # Arquitectura de InventarioFoto PWA
 
@@ -46,6 +67,61 @@ En iOS/Android: Abre Safari/Chrome → Compartir → "Agregar a inicio"
 | POST | /api/tipos-producto | Crea tipo nuevo |
 | POST | /api/sync | Sincroniza offline |
 | GET | /api/estadisticas | Stats |
+
+## 🔄 Arquitectura de Sincronización
+
+```mermaid
+sequenceDiagram
+    participant Usuario
+    participant UI
+    participant ServiceWorker
+    participant IndexedDB
+    participant BackgroundSync
+    participant Server
+
+    Note over Usuario,Server: MODO OFFLINE
+    Usuario->>UI: Crea/Edita Item
+    UI->>ServiceWorker: Request (POST/PUT)
+    ServiceWorker->>IndexedDB: Guardar local
+    IndexedDB-->>ServiceWorker: Confirmación
+    ServiceWorker-->>UI: Respuesta optimista
+    UI-->>Usuario: ✓ Guardado (offline)
+    ServiceWorker->>BackgroundSync: Queue para sync
+
+    Note over Usuario,Server: CONEXIÓN RESTAURADA
+    BackgroundSync->>Server: Sync pendientes
+    Server->>Server: Validar + Resolver conflictos
+    alt Conflicto detectado
+        Server->>Server: Last-write-wins (timestamp)
+    end
+    Server-->>BackgroundSync: Confirmación
+    BackgroundSync->>IndexedDB: Actualizar local
+    IndexedDB-->>UI: Notificar cambios
+    UI-->>Usuario: ✓ Sincronizado
+```
+#### Casos de Uso:
+
+**1. Usuario Offline:**
+- Usuario crea/edita item
+- UI guarda en IndexedDB inmediatamente
+- Operación encolada para sync
+- Usuario ve confirmación instantánea
+
+**2. Conexión Restaurada:**
+- Background Sync detecta online
+- Procesa queue de operaciones pendientes
+- Envía batch al servidor
+- Servidor resuelve conflictos por timestamp
+
+**3. Conflictos:**
+```javascript
+// Last-write-wins strategy
+const resolveConflict = (local, remote) => {
+  return local.timestamp > remote.timestamp 
+    ? local 
+    : remote;
+};
+```
 
 ## Autor
 
