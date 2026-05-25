@@ -13,6 +13,7 @@ import base64
 from PIL import Image
 import io
 from pathlib import Path
+import json
 
 # ============================================================================
 # CONFIGURACIÓN
@@ -72,6 +73,8 @@ def init_db():
             foto_url TEXT,
             foto_thumbnail TEXT,
             texto_ocr TEXT,
+            latitud REAL,
+            longitud REAL,
             fecha_creacion TEXT DEFAULT CURRENT_TIMESTAMP,
             fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP,
             sincronizado INTEGER DEFAULT 1,
@@ -87,6 +90,14 @@ def init_db():
             fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Migrar tabla existente si faltan columnas
+    cursor.execute("PRAGMA table_info(productos)")
+    columnas = [col[1] for col in cursor.fetchall()]
+    if 'latitud' not in columnas:
+        cursor.execute("ALTER TABLE productos ADD COLUMN latitud REAL")
+    if 'longitud' not in columnas:
+        cursor.execute("ALTER TABLE productos ADD COLUMN longitud REAL")
 
     # Insertar tipos por defecto
     cursor.execute("SELECT COUNT(*) as count FROM tipos_producto")
@@ -293,6 +304,10 @@ def create_producto():
     precio_unitario = float(precio) if precio else None
     tipo_producto_id = (request.form.get('tipo_producto_id') or '').strip() or None
     nuevo_tipo_nombre = (request.form.get('nuevo_tipo_nombre') or '').strip()
+    lat = request.form.get('latitud')
+    lng = request.form.get('longitud')
+    latitud = float(lat) if lat else None
+    longitud = float(lng) if lng else None
 
     if not nombre:
         return jsonify({'error': 'El nombre del producto es obligatorio'}), 400
@@ -344,10 +359,11 @@ def create_producto():
 
     cursor.execute("""
         INSERT INTO productos (id, nombre, descripcion, codigo_barras, cantidad, precio_unitario,
-        tipo_producto_id, foto_url, foto_thumbnail, texto_ocr, fecha_creacion, fecha_actualizacion, sincronizado)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        tipo_producto_id, foto_url, foto_thumbnail, texto_ocr, latitud, longitud,
+        fecha_creacion, fecha_actualizacion, sincronizado)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (producto_id, nombre, descripcion, codigo_barras, cantidad, precio_unitario,
-          tipo_producto_id, foto_url, foto_thumbnail, '', ahora, ahora, 1))
+          tipo_producto_id, foto_url, foto_thumbnail, '', latitud, longitud, ahora, ahora, 1))
     conn.commit()
 
     cursor.execute("""
@@ -380,6 +396,82 @@ def delete_producto(producto_id):
     conn.close()
 
     return jsonify({'message': 'Eliminado'}), 200
+
+
+# ============================================================================
+# API - CLASIFICACIÓN IA (Gemini Vision)
+# ============================================================================
+
+gemini_client = None
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+if GEMINI_API_KEY:
+    try:
+        from google import genai
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"Gemini no disponible: {e}")
+
+
+@app.route('/api/clasificar', methods=['POST'])
+def clasificar_producto():
+    if not gemini_client:
+        return jsonify({'error': 'Clasificación no configurada'}), 503
+
+    data = request.get_json(silent=True) or {}
+    foto_b64 = data.get('foto_base64', '')
+    if not foto_b64:
+        return jsonify({'error': 'Foto requerida'}), 400
+
+    if ',' in foto_b64:
+        foto_b64 = foto_b64.split(',')[1]
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre FROM tipos_producto ORDER BY nombre")
+    tipos = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    nombres_tipos = [t['nombre'] for t in tipos]
+    mapa_tipos = {t['nombre'].lower(): t['id'] for t in tipos}
+
+    prompt = (
+        f"Analiza esta imagen de un producto. "
+        f"Clasifícalo en UNA de estas categorías: {', '.join(nombres_tipos)}. "
+        f"También sugiere un nombre corto para el producto. "
+        f"Responde SOLO con JSON válido, sin markdown, con este formato exacto: "
+        f'{{"categoria": "nombre_categoria", "nombre_sugerido": "nombre_producto"}}'
+    )
+
+    try:
+        from google.genai import types
+
+        img_bytes = base64.b64decode(foto_b64)
+
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                prompt,
+            ],
+        )
+
+        texto = response.text.strip()
+        if texto.startswith('```'):
+            texto = texto.split('\n', 1)[1].rsplit('```', 1)[0].strip()
+
+        resultado = json.loads(texto)
+        categoria = resultado.get('categoria', '')
+        tipo_id = mapa_tipos.get(categoria.lower())
+
+        return jsonify({
+            'tipo_id': tipo_id,
+            'tipo_nombre': categoria,
+            'nombre_sugerido': resultado.get('nombre_sugerido', ''),
+        })
+
+    except Exception as e:
+        print(f"Error clasificando: {e}")
+        return jsonify({'error': 'No se pudo clasificar'}), 500
 
 
 # ============================================================================
@@ -471,15 +563,18 @@ def sync_offline():
                 continue
 
             ahora = datetime.now().isoformat()
+            sync_lat = float(item['latitud']) if item.get('latitud') else None
+            sync_lng = float(item['longitud']) if item.get('longitud') else None
             conn = get_db()
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO productos (id, nombre, descripcion, codigo_barras, cantidad, precio_unitario,
-                tipo_producto_id, foto_url, foto_thumbnail, texto_ocr, fecha_creacion, fecha_actualizacion, sincronizado)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tipo_producto_id, foto_url, foto_thumbnail, texto_ocr, latitud, longitud,
+                fecha_creacion, fecha_actualizacion, sincronizado)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (producto_id, nombre, item.get('descripcion', ''), item.get('codigo_barras', ''),
                   item.get('cantidad', 1), item.get('precio_unitario'), tipo_id, foto_url, foto_thumbnail,
-                  item.get('texto_ocr', ''), item.get('fecha_creacion', ahora), ahora, 1))
+                  item.get('texto_ocr', ''), sync_lat, sync_lng, item.get('fecha_creacion', ahora), ahora, 1))
             conn.commit()
             conn.close()
 

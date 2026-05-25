@@ -116,6 +116,14 @@ class ApiService {
             body: JSON.stringify({ moneda_simbolo }),
         });
     }
+
+    static clasificarFoto(foto_base64) {
+        return this.fetchJson('/api/clasificar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ foto_base64 }),
+        });
+    }
 }
 
 // ============================================================================
@@ -523,7 +531,8 @@ class InventarioApp {
         this.tipoSeleccionado = null;
         this.estaOnline = navigator.onLine;
         this.iconoActual = '📦';
-        this.monedaSimbolo = 'S/'; // Valor por defecto
+        this.monedaSimbolo = 'S/';
+        this.ubicacionActual = null;
 
         this._setupCameraCallbacks();
         this._setupEventListeners();
@@ -586,6 +595,7 @@ class InventarioApp {
                 if (preview) preview.classList.remove('hidden');
                 if (controls) controls.classList.add('hidden');
             } else {
+                this._capturarUbicacion();
                 this._mostrarFormularioProducto(foto);
             }
         };
@@ -804,8 +814,30 @@ class InventarioApp {
             UIManager.mostrarToast('Primero captura una foto', 'warning');
             return;
         }
+        this._capturarUbicacion();
         this.cerrarCamara(true);
         this._mostrarFormularioProducto(foto);
+    }
+
+    _capturarUbicacion() {
+        this.ubicacionActual = null;
+        if (!navigator.geolocation) return;
+
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                this.ubicacionActual = {
+                    latitud: pos.coords.latitude,
+                    longitud: pos.coords.longitude,
+                };
+                const indicador = document.getElementById('ubicacion-indicador');
+                if (indicador) {
+                    indicador.textContent = `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+                    indicador.closest('.ubicacion-row')?.classList.remove('hidden');
+                }
+            },
+            () => { },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+        );
     }
 
     // ====================================================================
@@ -814,6 +846,8 @@ class InventarioApp {
 
     _mostrarFormularioProducto(fotoBase64) {
         const container = document.getElementById('main-content');
+
+        this._clasificarConIA(fotoBase64);
 
         container.innerHTML = `
             <div class="fade-in p-4 pb-24">
@@ -828,6 +862,10 @@ class InventarioApp {
 
                 <div class="bg-white rounded-2xl overflow-hidden mb-4 shadow-sm">
                     <img src="${fotoBase64}" class="w-full h-48 object-cover">
+                    <div id="ia-badge" class="hidden px-4 py-2 bg-purple-50 border-t border-purple-100 flex items-center space-x-2">
+                        <span class="text-purple-500 text-sm">🤖</span>
+                        <span id="ia-mensaje" class="text-xs text-purple-700"></span>
+                    </div>
                 </div>
 
                 <form id="product-form" class="space-y-4">
@@ -879,6 +917,15 @@ class InventarioApp {
                         <textarea id="form-descripcion" rows="2" placeholder="Opcional"
                             class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
                     </div>
+
+                    <div class="ubicacion-row ${this.ubicacionActual ? '' : 'hidden'} flex items-center space-x-2 p-3 bg-green-50 rounded-xl border border-green-200">
+                        <span class="text-green-600">📍</span>
+                        <span id="ubicacion-indicador" class="text-xs text-green-700 font-mono">${
+                            this.ubicacionActual
+                                ? this.ubicacionActual.latitud.toFixed(5) + ', ' + this.ubicacionActual.longitud.toFixed(5)
+                                : ''
+                        }</span>
+                    </div>
                 </form>
 
                 <button onclick="app.guardarProducto('${fotoBase64}')"
@@ -887,6 +934,37 @@ class InventarioApp {
                 </button>
             </div>
         `;
+    }
+
+    async _clasificarConIA(fotoBase64) {
+        if (!this.estaOnline) return;
+
+        try {
+            const resultado = await ApiService.clasificarFoto(fotoBase64);
+
+            if (resultado.tipo_id) {
+                this.seleccionarTipoForm(resultado.tipo_id);
+            }
+
+            if (resultado.nombre_sugerido) {
+                const inputNombre = document.getElementById('form-nombre');
+                if (inputNombre && !inputNombre.value) {
+                    inputNombre.value = resultado.nombre_sugerido;
+                }
+            }
+
+            const badge = document.getElementById('ia-badge');
+            const mensaje = document.getElementById('ia-mensaje');
+            if (badge && mensaje) {
+                const partes = [];
+                if (resultado.tipo_nombre) partes.push(resultado.tipo_nombre);
+                if (resultado.nombre_sugerido) partes.push(`"${resultado.nombre_sugerido}"`);
+                mensaje.textContent = `Sugerencia: ${partes.join(' · ')}`;
+                badge.classList.remove('hidden');
+            }
+        } catch (error) {
+            console.log('Clasificación IA no disponible');
+        }
     }
 
     seleccionarTipoForm(tipoId) {
@@ -930,6 +1008,8 @@ class InventarioApp {
             descripcion,
             tipo_producto_id: tipoId,
             foto_base64: fotoBase64,
+            latitud: this.ubicacionActual?.latitud || null,
+            longitud: this.ubicacionActual?.longitud || null,
         };
 
         if (this.estaOnline) {
@@ -950,6 +1030,7 @@ class InventarioApp {
             this.productos.unshift(respuesta);
             UIManager.mostrarToast('Producto guardado', 'success');
             this.camera.fotoCapturada = null;
+            this.ubicacionActual = null;
             this.cambiarVista('inicio');
         } catch (error) {
             console.error('Error guardando en servidor:', error);
@@ -963,6 +1044,7 @@ class InventarioApp {
             await this._actualizarEstadoUI();
             UIManager.mostrarToast('Guardado offline - se sincronizará luego', 'info');
             this.camera.fotoCapturada = null;
+            this.ubicacionActual = null;
             this.cambiarVista('inicio');
         } catch (error) {
             console.error('Error guardando offline:', error);
@@ -1067,6 +1149,18 @@ class InventarioApp {
                             <div class="mt-4 p-3 bg-slate-100 rounded-xl">
                                 <div class="text-xs text-slate-500 mb-1">Código de barras</div>
                                 <div class="font-mono text-sm">${producto.codigo_barras}</div>
+                            </div>
+                        ` : ''}
+
+                        ${producto.latitud && producto.longitud ? `
+                            <div class="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-200">
+                                <div class="text-xs text-blue-500 mb-1">Ubicación de captura</div>
+                                <a href="https://www.google.com/maps?q=${producto.latitud},${producto.longitud}" target="_blank" rel="noopener"
+                                    class="flex items-center space-x-2 text-blue-700">
+                                    <span>📍</span>
+                                    <span class="font-mono text-sm">${producto.latitud.toFixed(5)}, ${producto.longitud.toFixed(5)}</span>
+                                    <svg class="w-4 h-4 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                </a>
                             </div>
                         ` : ''}
 

@@ -1,7 +1,7 @@
 
 # 📱 InventarioFoto PWA
 
-Sistema de gestión de inventario con fotos, offline-first. Toma una foto, registra el producto. Si no existe el tipo, lo creas al instante.
+📦 PWA offline-first para gestión de inventario con fotos.Toma una foto, registra el producto. Si no existe el tipo, lo creas al instante. React + IndexedDB + Service Workers.
 
 ## 🚀 Demo Live
 
