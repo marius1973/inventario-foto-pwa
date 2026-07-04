@@ -21,6 +21,7 @@ const CONSTANTS = {
     DB_NAME: 'InventarioDB',
     DB_VERSION: 1,
     PRODUCTOS_POR_PAGINA: 10,
+    PAGE_SIZE: 50,
     TOAST_DURATION_MS: 3000,
     CAMERA_TIMEOUT_MS: 2000,
     VIDEO_FRAME_WAIT_ATTEMPTS: 30,
@@ -64,11 +65,30 @@ class ApiService {
         });
     }
 
+    static actualizarTipo(id, datos) {
+        return this.fetchJson(`/api/tipos-producto/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(datos),
+        });
+    }
+
+    static async eliminarTipo(id, reasignarA = null) {
+        const url = reasignarA
+            ? `/api/tipos-producto/${id}?reasignar_a=${encodeURIComponent(reasignarA)}`
+            : `/api/tipos-producto/${id}`;
+        const respuesta = await fetch(url, { method: 'DELETE' });
+        const body = await respuesta.json().catch(() => ({}));
+        return { ok: respuesta.ok, status: respuesta.status, body };
+    }
+
     // Productos
     static getProductos(filtros = {}) {
         const params = new URLSearchParams();
         if (filtros.tipo_id) params.append('tipo_id', filtros.tipo_id);
         if (filtros.q) params.append('q', filtros.q);
+        if (filtros.limit) params.append('limit', filtros.limit);
+        if (filtros.offset) params.append('offset', filtros.offset);
 
         const queryString = params.toString();
         const endpoint = queryString ? `/api/productos?${queryString}` : '/api/productos';
@@ -82,6 +102,13 @@ class ApiService {
     static crearProducto(formData) {
         return this.fetchJson('/api/productos', {
             method: 'POST',
+            body: formData,
+        });
+    }
+
+    static actualizarProducto(id, formData) {
+        return this.fetchJson(`/api/productos/${id}`, {
+            method: 'PUT',
             body: formData,
         });
     }
@@ -415,6 +442,138 @@ class CameraManager {
 }
 
 // ============================================================================
+// BARCODE SCANNER - Escaneo de códigos de barras
+// ============================================================================
+
+class BarcodeScanner {
+    /**
+     * Escanea códigos de barras con la cámara.
+     * Usa la API nativa BarcodeDetector (Chrome/Android) y cae a ZXing
+     * (cargado desde CDN) en navegadores sin soporte, como iOS Safari.
+     */
+
+    static ZXING_CDN = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+    static FORMATOS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'];
+
+    constructor() {
+        this.stream = null;
+        this.activo = false;
+        this.onDetectado = null;
+        this._reader = null;
+        this._detector = null;
+    }
+
+    async abrir(onDetectado) {
+        if (!navigator.mediaDevices?.getUserMedia) {
+            UIManager.mostrarToast('Tu navegador no permite usar la cámara aquí', 'error');
+            return;
+        }
+        if (!window.isSecureContext) {
+            UIManager.mostrarToast('El escáner requiere HTTPS', 'error');
+            return;
+        }
+
+        this.onDetectado = onDetectado;
+        this.activo = true;
+        document.getElementById('scanner-overlay')?.classList.add('active');
+
+        try {
+            if ('BarcodeDetector' in window) {
+                await this._iniciarNativo();
+            } else {
+                await this._iniciarZXing();
+            }
+        } catch (error) {
+            console.error('Error iniciando escáner:', error);
+            UIManager.mostrarToast('No se pudo iniciar el escáner', 'error');
+            this.cerrar();
+        }
+    }
+
+    async _iniciarNativo() {
+        const soportados = await window.BarcodeDetector.getSupportedFormats();
+        const formatos = BarcodeScanner.FORMATOS.filter(f => soportados.includes(f));
+        if (formatos.length === 0) {
+            await this._iniciarZXing();
+            return;
+        }
+
+        this._detector = new window.BarcodeDetector({ formats: formatos });
+        this.stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false,
+        });
+
+        const video = document.getElementById('scanner-video');
+        video.srcObject = this.stream;
+        video.muted = true;
+        video.playsInline = true;
+        await video.play().catch(() => {});
+        this._escanearFrame(video);
+    }
+
+    async _escanearFrame(video) {
+        if (!this.activo) return;
+        try {
+            if (video.readyState >= 2) {
+                const codigos = await this._detector.detect(video);
+                if (codigos.length > 0) {
+                    this._detectado(codigos[0].rawValue);
+                    return;
+                }
+            }
+        } catch (e) {
+            // Frame aún no disponible; se reintenta
+        }
+        setTimeout(() => this._escanearFrame(video), 250);
+    }
+
+    async _iniciarZXing() {
+        await this._cargarZXing();
+        this._reader = new window.ZXing.BrowserMultiFormatReader();
+        await this._reader.decodeFromVideoDevice(null, 'scanner-video', (resultado) => {
+            if (resultado && this.activo) {
+                this._detectado(resultado.getText());
+            }
+        });
+    }
+
+    _cargarZXing() {
+        if (window.ZXing) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = BarcodeScanner.ZXING_CDN;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error('No se pudo cargar la librería de escaneo (¿sin conexión?)'));
+            document.head.appendChild(script);
+        });
+    }
+
+    _detectado(codigo) {
+        if (!this.activo) return;
+        this.activo = false;
+        if (navigator.vibrate) navigator.vibrate(80);
+        this.cerrar();
+        this.onDetectado?.(codigo);
+    }
+
+    cerrar() {
+        this.activo = false;
+        if (this._reader) {
+            try { this._reader.reset(); } catch (e) { /* ignorar */ }
+            this._reader = null;
+        }
+        if (this.stream) {
+            this.stream.getTracks().forEach(track => track.stop());
+            this.stream = null;
+        }
+        const video = document.getElementById('scanner-video');
+        if (video) video.srcObject = null;
+        document.getElementById('scanner-overlay')?.classList.remove('active');
+    }
+}
+
+// ============================================================================
 // UI MANAGER - Renderización y gestión de UI
 // ============================================================================
 
@@ -524,12 +683,16 @@ class InventarioApp {
         this.storage = new StorageService();
         this.sync = new SyncService(this.storage);
         this.camera = new CameraManager();
+        this.barcodeScanner = new BarcodeScanner();
 
         this.productos = [];
         this.tipos = [];
         this.vistaActual = 'inicio';
         this.tipoSeleccionado = null;
         this.estaOnline = navigator.onLine;
+        this.filtroActual = {};
+        this.hayMasProductos = false;
+        this._tipoEditando = null;
         this.iconoActual = '📦';
         this.monedaSimbolo = 'S/';
         this.ubicacionActual = null;
@@ -561,14 +724,31 @@ class InventarioApp {
     async _cargarDatos() {
         try {
             const [productos, tipos] = await Promise.all([
-                ApiService.getProductos(),
+                ApiService.getProductos({ ...this.filtroActual, limit: CONSTANTS.PAGE_SIZE }),
                 ApiService.getTipos(),
             ]);
 
             this.productos = productos;
             this.tipos = tipos;
+            this.hayMasProductos = productos.length === CONSTANTS.PAGE_SIZE;
         } catch (error) {
             console.error('Error cargando datos:', error);
+        }
+    }
+
+    async cargarMasProductos() {
+        try {
+            const siguientes = await ApiService.getProductos({
+                ...this.filtroActual,
+                limit: CONSTANTS.PAGE_SIZE,
+                offset: this.productos.length,
+            });
+            this.productos = this.productos.concat(siguientes);
+            this.hayMasProductos = siguientes.length === CONSTANTS.PAGE_SIZE;
+            this._renderizarVista(this.vistaActual);
+        } catch (error) {
+            console.error('Error cargando más productos:', error);
+            UIManager.mostrarToast('Error cargando más productos', 'error');
         }
     }
 
@@ -676,7 +856,10 @@ class InventarioApp {
                     <div class="px-4 mb-4">
                         <div class="flex justify-between items-center mb-3">
                             <h2 class="font-semibold text-slate-900">Categorías</h2>
-                            <button onclick="app.abrirModalTipo()" class="text-blue-500 text-sm font-medium">+ Nuevo</button>
+                            <div class="flex items-center space-x-4">
+                                <button onclick="app.gestionarTipos()" class="text-slate-500 text-sm font-medium">⚙️ Gestionar</button>
+                                <button onclick="app.abrirModalTipo()" class="text-blue-500 text-sm font-medium">+ Nuevo</button>
+                            </div>
                         </div>
                         <div class="flex space-x-3 overflow-x-auto hide-scrollbar pb-2">
                             ${this._renderizarFiltrosTipo()}
@@ -735,12 +918,30 @@ class InventarioApp {
     async _renderizarHistorial(container) {
         container.innerHTML = `
             <div class="fade-in p-4">
-                <h2 class="font-semibold text-slate-900 mb-4">Historial completo</h2>
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="font-semibold text-slate-900">Historial completo</h2>
+                    <div class="flex space-x-2">
+                        <a href="/api/export?formato=xlsx" download
+                            class="flex items-center space-x-1 px-3 py-2 rounded-lg bg-green-600 text-white text-xs font-medium active:scale-95 transition">
+                            <span>📊</span><span>Excel</span>
+                        </a>
+                        <a href="/api/export?formato=csv" download
+                            class="flex items-center space-x-1 px-3 py-2 rounded-lg bg-slate-600 text-white text-xs font-medium active:scale-95 transition">
+                            <span>📄</span><span>CSV</span>
+                        </a>
+                    </div>
+                </div>
                 <div class="space-y-3">
                     ${this.productos
                         .map(p => UIManager.renderizarProductoCard(p, this.monedaSimbolo))
                         .join('')}
                 </div>
+                ${this.hayMasProductos ? `
+                    <button onclick="app.cargarMasProductos()"
+                        class="w-full mt-4 py-3 rounded-xl bg-white shadow-sm text-blue-500 font-medium active:scale-95 transition">
+                        Cargar más productos
+                    </button>
+                ` : ''}
             </div>
         `;
     }
@@ -751,10 +952,13 @@ class InventarioApp {
 
     async filtrarPorTipo(tipoId) {
         this.tipoSeleccionado = tipoId;
+        this.filtroActual = tipoId ? { tipo_id: tipoId } : {};
         try {
             this.productos = await ApiService.getProductos({
-                tipo_id: tipoId,
+                ...this.filtroActual,
+                limit: CONSTANTS.PAGE_SIZE,
             });
+            this.hayMasProductos = this.productos.length === CONSTANTS.PAGE_SIZE;
             this._renderizarVista('inicio');
         } catch (error) {
             console.error('Error filtrando:', error);
@@ -764,13 +968,16 @@ class InventarioApp {
 
     async buscar(query) {
         if (!query) {
+            this.filtroActual = {};
             await this._cargarDatos();
             this._renderizarVista(this.vistaActual);
             return;
         }
 
+        this.filtroActual = { q: query };
         try {
-            this.productos = await ApiService.getProductos({ q: query });
+            this.productos = await ApiService.getProductos({ q: query, limit: CONSTANTS.PAGE_SIZE });
+            this.hayMasProductos = this.productos.length === CONSTANTS.PAGE_SIZE;
             this._renderizarVista('inicio');
         } catch (error) {
             console.error('Error buscando:', error);
@@ -841,6 +1048,22 @@ class InventarioApp {
     }
 
     // ====================================================================
+    // Escáner de código de barras
+    // ====================================================================
+
+    escanearCodigo() {
+        this.barcodeScanner.abrir((codigo) => {
+            const input = document.getElementById('form-codigo');
+            if (input) input.value = codigo;
+            UIManager.mostrarToast(`Código detectado: ${codigo}`, 'success');
+        });
+    }
+
+    cerrarScanner() {
+        this.barcodeScanner.cerrar();
+    }
+
+    // ====================================================================
     // Formulario de Producto
     // ====================================================================
 
@@ -890,8 +1113,14 @@ class InventarioApp {
 
                     <div>
                         <label class="block text-sm font-medium text-slate-700 mb-1">Código de barras</label>
-                        <input type="text" id="form-codigo" placeholder="Escanea o escribe"
-                            class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <div class="flex space-x-2">
+                            <input type="text" id="form-codigo" placeholder="Escanea o escribe"
+                                class="flex-1 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="app.escanearCodigo()" title="Escanear código"
+                                class="px-4 rounded-xl bg-slate-900 text-white flex items-center justify-center active:scale-95 transition">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14"/></svg>
+                            </button>
+                        </div>
                     </div>
 
                     <div>
@@ -1057,8 +1286,110 @@ class InventarioApp {
     // ====================================================================
 
     abrirModalTipo() {
+        this._tipoEditando = null;
+        this.iconoActual = '📦';
         UIManager.abrirModal('modal-tipo');
         document.getElementById('nuevo-tipo-nombre').value = '';
+        const titulo = document.getElementById('modal-tipo-titulo');
+        if (titulo) titulo.textContent = 'Crear nuevo tipo';
+        const guardar = document.getElementById('modal-tipo-guardar');
+        if (guardar) guardar.textContent = 'Crear';
+    }
+
+    async gestionarTipos() {
+        try {
+            this.tipos = await ApiService.getTipos();
+        } catch (error) {
+            console.error('Error cargando tipos:', error);
+        }
+
+        const container = document.getElementById('main-content');
+        container.innerHTML = `
+            <div class="fade-in p-4">
+                <div class="flex items-center space-x-3 mb-4">
+                    <button onclick="app.cambiarVista('inicio')" class="p-2 -ml-2">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                        </svg>
+                    </button>
+                    <h2 class="font-bold text-lg">Gestionar tipos</h2>
+                </div>
+                <div class="space-y-2">
+                    ${this.tipos.map(tipo => `
+                        <div class="bg-white rounded-xl p-3 shadow-sm flex items-center space-x-3">
+                            <div class="w-10 h-10 rounded-lg flex items-center justify-center text-xl flex-shrink-0"
+                                style="background:${tipo.color}20">${tipo.icono}</div>
+                            <div class="flex-1 min-w-0">
+                                <div class="font-medium text-slate-900 text-sm truncate" id="tipo-nombre-${tipo.id}"></div>
+                                <div class="text-xs text-slate-500">${tipo.num_productos ?? 0} producto(s)</div>
+                            </div>
+                            <button onclick="app.editarTipo('${tipo.id}')" class="p-2 text-blue-500" title="Editar">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                            </button>
+                            <button onclick="app.eliminarTipo('${tipo.id}')" class="p-2 text-red-400" title="Eliminar">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            </button>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+
+        // Nombres vía JS para no romper el HTML con comillas
+        this.tipos.forEach(tipo => {
+            const el = document.getElementById(`tipo-nombre-${tipo.id}`);
+            if (el) el.textContent = tipo.nombre;
+        });
+    }
+
+    editarTipo(tipoId) {
+        const tipo = this.tipos.find(t => t.id === tipoId);
+        if (!tipo) return;
+
+        this._tipoEditando = tipoId;
+        this.iconoActual = tipo.icono || '📦';
+        UIManager.abrirModal('modal-tipo');
+        document.getElementById('nuevo-tipo-nombre').value = tipo.nombre;
+        const titulo = document.getElementById('modal-tipo-titulo');
+        if (titulo) titulo.textContent = 'Editar tipo';
+        const guardar = document.getElementById('modal-tipo-guardar');
+        if (guardar) guardar.textContent = 'Guardar';
+    }
+
+    async eliminarTipo(tipoId) {
+        const tipo = this.tipos.find(t => t.id === tipoId);
+        if (!tipo) return;
+        if (!confirm(`¿Eliminar el tipo "${tipo.nombre}"?`)) return;
+
+        try {
+            let resultado = await ApiService.eliminarTipo(tipoId);
+
+            if (resultado.status === 409) {
+                const destino = this.tipos.find(t => t.nombre === 'Sin clasificar' && t.id !== tipoId)
+                    || this.tipos.find(t => t.id !== tipoId);
+                if (!destino) {
+                    UIManager.mostrarToast('No hay otro tipo para mover los productos', 'error');
+                    return;
+                }
+                const n = resultado.body.productos;
+                if (!confirm(`Tiene ${n} producto(s). ¿Moverlos a "${destino.nombre}" y eliminar el tipo?`)) return;
+                resultado = await ApiService.eliminarTipo(tipoId, destino.id);
+            }
+
+            if (!resultado.ok) {
+                UIManager.mostrarToast(resultado.body.error || 'Error eliminando tipo', 'error');
+                return;
+            }
+
+            UIManager.mostrarToast('Tipo eliminado', 'success');
+            this.filtroActual = {};
+            this.tipoSeleccionado = null;
+            await this._cargarDatos();
+            this.gestionarTipos();
+        } catch (error) {
+            console.error('Error eliminando tipo:', error);
+            UIManager.mostrarToast('Error eliminando tipo', 'error');
+        }
     }
 
     cerrarModalTipo() {
@@ -1081,6 +1412,27 @@ class InventarioApp {
         const nombre = document.getElementById('nuevo-tipo-nombre').value.trim();
         if (!nombre) {
             UIManager.mostrarToast('Escribe un nombre', 'warning');
+            return;
+        }
+
+        // Modo edición
+        if (this._tipoEditando) {
+            try {
+                const actualizado = await ApiService.actualizarTipo(this._tipoEditando, {
+                    nombre,
+                    icono: this.iconoActual,
+                });
+                const idx = this.tipos.findIndex(t => t.id === this._tipoEditando);
+                if (idx !== -1) this.tipos[idx] = { ...this.tipos[idx], ...actualizado };
+                this._tipoEditando = null;
+                this.cerrarModalTipo();
+                UIManager.mostrarToast('Tipo actualizado', 'success');
+                await this._cargarDatos();
+                this.gestionarTipos();
+            } catch (error) {
+                console.error('Error actualizando tipo:', error);
+                UIManager.mostrarToast(error.message || 'Error actualizando tipo', 'error');
+            }
             return;
         }
 
@@ -1164,8 +1516,13 @@ class InventarioApp {
                             </div>
                         ` : ''}
 
+                        <button onclick="app.editarProducto('${producto.id}')"
+                            class="w-full mt-6 bg-blue-500 text-white font-semibold py-3 rounded-xl shadow-lg shadow-blue-500/30">
+                            ✏️ Editar Producto
+                        </button>
+
                         <button onclick="app.eliminarProducto('${producto.id}')"
-                            class="w-full mt-6 bg-red-50 text-red-500 font-semibold py-3 rounded-xl border border-red-200">
+                            class="w-full mt-3 bg-red-50 text-red-500 font-semibold py-3 rounded-xl border border-red-200">
                             Eliminar Producto
                         </button>
                     </div>
@@ -1174,6 +1531,139 @@ class InventarioApp {
         } catch (error) {
             console.error('Error obteniendo producto:', error);
             UIManager.mostrarToast('Error cargando producto', 'error');
+        }
+    }
+
+    // ====================================================================
+    // Editar Producto
+    // ====================================================================
+
+    async editarProducto(productoId) {
+        try {
+            const producto = await ApiService.getProducto(productoId);
+            const container = document.getElementById('main-content');
+            const urlFoto = producto.foto_thumbnail || producto.foto_url;
+
+            container.innerHTML = `
+                <div class="fade-in p-4 pb-24">
+                    <div class="flex items-center space-x-3 mb-4">
+                        <button onclick="app.verProducto('${producto.id}')" class="p-2 -ml-2">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                            </svg>
+                        </button>
+                        <h2 class="font-bold text-lg">Editar producto</h2>
+                    </div>
+
+                    ${urlFoto ? `
+                        <div class="bg-white rounded-2xl overflow-hidden mb-4 shadow-sm">
+                            <img src="${urlFoto}" class="w-full h-48 object-cover">
+                        </div>
+                    ` : ''}
+
+                    <form id="product-form" class="space-y-4" onsubmit="return false">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Nombre *</label>
+                            <input type="text" id="form-nombre"
+                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Cantidad</label>
+                                <input type="number" id="form-cantidad" min="0"
+                                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Precio</label>
+                                <input type="number" id="form-precio" placeholder="0.00" step="0.01"
+                                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Código de barras</label>
+                            <div class="flex space-x-2">
+                                <input type="text" id="form-codigo"
+                                    class="flex-1 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <button type="button" onclick="app.escanearCodigo()" title="Escanear código"
+                                    class="px-4 rounded-xl bg-slate-900 text-white flex items-center justify-center active:scale-95 transition">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14"/></svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Tipo *</label>
+                            <div class="flex flex-wrap gap-2">
+                                ${this.tipos.map(tipo => `
+                                    <button type="button" onclick="app.seleccionarTipoForm('${tipo.id}')"
+                                        id="tipo-form-${tipo.id}"
+                                        class="tipo-form-btn flex items-center space-x-1 px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm hover:bg-slate-200 transition">
+                                        <span>${tipo.icono}</span><span>${tipo.nombre}</span>
+                                    </button>
+                                `).join('')}
+                            </div>
+                            <input type="hidden" id="form-tipo-id">
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Descripción</label>
+                            <textarea id="form-descripcion" rows="2" placeholder="Opcional"
+                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
+                        </div>
+                    </form>
+
+                    <button onclick="app.guardarEdicion('${producto.id}')"
+                        class="w-full mt-6 bg-blue-500 text-white font-semibold py-4 rounded-xl shadow-lg shadow-blue-500/30 active:scale-95 transition">
+                        Guardar Cambios
+                    </button>
+                </div>
+            `;
+
+            // Precargar valores vía JS (evita romper el HTML con comillas)
+            document.getElementById('form-nombre').value = producto.nombre || '';
+            document.getElementById('form-cantidad').value = producto.cantidad ?? 1;
+            document.getElementById('form-precio').value = producto.precio_unitario ?? '';
+            document.getElementById('form-codigo').value = producto.codigo_barras || '';
+            document.getElementById('form-descripcion').value = producto.descripcion || '';
+            this.seleccionarTipoForm(producto.tipo_producto_id);
+        } catch (error) {
+            console.error('Error cargando producto para editar:', error);
+            UIManager.mostrarToast('Error cargando producto', 'error');
+        }
+    }
+
+    async guardarEdicion(productoId) {
+        const nombre = document.getElementById('form-nombre').value.trim();
+        const tipoId = document.getElementById('form-tipo-id').value;
+
+        if (!nombre) {
+            UIManager.mostrarToast('El nombre es obligatorio', 'warning');
+            return;
+        }
+        if (!tipoId) {
+            UIManager.mostrarToast('Selecciona un tipo', 'warning');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('nombre', nombre);
+        formData.append('cantidad', document.getElementById('form-cantidad').value || '1');
+        formData.append('precio_unitario', document.getElementById('form-precio').value);
+        formData.append('codigo_barras', document.getElementById('form-codigo').value);
+        formData.append('descripcion', document.getElementById('form-descripcion').value);
+        formData.append('tipo_producto_id', tipoId);
+
+        try {
+            const actualizado = await ApiService.actualizarProducto(productoId, formData);
+            const idx = this.productos.findIndex(p => p.id === productoId);
+            if (idx !== -1) this.productos[idx] = actualizado;
+            UIManager.mostrarToast('Producto actualizado', 'success');
+            this.verProducto(productoId);
+        } catch (error) {
+            console.error('Error actualizando:', error);
+            UIManager.mostrarToast('Error actualizando producto', 'error');
         }
     }
 

@@ -66,6 +66,12 @@
         input, textarea, select { font-size: 16px; }
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .scan-line {
+            position: absolute; left: 8px; right: 8px; height: 2px;
+            background: #ef4444; box-shadow: 0 0 8px #ef4444;
+            animation: scanMove 2s ease-in-out infinite;
+        }
+        @keyframes scanMove { 0%, 100% { top: 10%; } 50% { top: 88%; } }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -131,9 +137,24 @@
         </button>
     </div>
 
+    <div id="scanner-overlay" class="camera-overlay">
+        <video id="scanner-video" autoplay playsinline muted webkit-playsinline class="flex-1 object-cover"></video>
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div class="w-72 h-40 border-2 border-white/80 rounded-xl relative overflow-hidden">
+                <div class="scan-line"></div>
+            </div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/60 to-transparent pointer-events-none">
+            <p class="text-white/80 text-center text-sm">Apunta al código de barras</p>
+        </div>
+        <button onclick="app.cerrarScanner()" class="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+    </div>
+
     <div id="modal-tipo" class="fixed inset-0 bg-black/50 z-50 hidden flex items-end sm:items-center justify-center">
         <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-96 p-6 slide-up">
-            <h3 class="text-lg font-bold mb-4">Crear nuevo tipo</h3>
+            <h3 id="modal-tipo-titulo" class="text-lg font-bold mb-4">Crear nuevo tipo</h3>
             <input type="text" id="nuevo-tipo-nombre" placeholder="Ej: Electronica, Herramientas..."
                 class="w-full border border-slate-200 rounded-lg px-4 py-3 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500">
             <div class="flex space-x-2 mb-4 overflow-x-auto hide-scrollbar py-1">
@@ -147,7 +168,7 @@
             </div>
             <div class="flex space-x-3">
                 <button onclick="app.cerrarModalTipo()" class="flex-1 py-3 rounded-lg bg-slate-100 text-slate-700 font-medium">Cancelar</button>
-                <button onclick="app.guardarNuevoTipo()" class="flex-1 py-3 rounded-lg bg-blue-500 text-white font-medium">Crear</button>
+                <button id="modal-tipo-guardar" onclick="app.guardarNuevoTipo()" class="flex-1 py-3 rounded-lg bg-blue-500 text-white font-medium">Crear</button>
             </div>
         </div>
     </div>
