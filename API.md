@@ -518,11 +518,12 @@ curl http://localhost:5000/api/productos?nombre=pintura&tipo_producto_id=tipo-1
 
 ## Roadmap API
 
-- [ ] Autenticación con JWT
-- [ ] Rate limiting por IP
-- [ ] Paginación automática
+- [x] Autenticación con API_KEY (Bearer + cookie; login en UI)
+- [x] Rate limiting por IP
+- [x] Paginación (`limit` / `offset`)
+- [x] Exportar a CSV/Excel
+- [ ] Autenticación multi-usuario (JWT / roles)
 - [ ] Filtros avanzados
-- [ ] Exportar a CSV/Excel
 - [ ] Webhooks para eventos
 - [ ] GraphQL endpoint
 - [ ] Versionado de API (v1, v2)

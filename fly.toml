@@ -1,0 +1,31 @@
+# fly launch --no-deploy  # si el nombre de app ya existe, cámbialo aquí
+app = "inventario-foto-pwa"
+primary_region = "bog"
+
+[build]
+
+[env]
+  PORT = "8080"
+  FLASK_ENV = "production"
+  PYTHONUNBUFFERED = "1"
+  # Secrets: fly secrets set API_KEY=... GEMINI_API_KEY=...
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

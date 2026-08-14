@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.db
+.env
+uploads/
+*.docx
+.pytest_cache/
+.mypy_cache/

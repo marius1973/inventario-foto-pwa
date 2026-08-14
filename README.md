@@ -5,7 +5,12 @@
 
 ## 🚀 Demo Live
 
-**Pruébalo aquí**: https://inventario-foto-pwa.onrender.com
+**Render**: https://inventario-foto-pwa.onrender.com
+
+**Fly.io**: preparado (`Dockerfile` + `fly.toml`); deploy manual con flyctl (ver abajo).
+
+### Auth en producción
+Define `API_KEY` (obligatoria si `FLASK_ENV=production`). La UI pide la clave al entrar.
 
 ### Qué probar:
 1. Agrega items con fotos
@@ -59,17 +64,40 @@
 
 ```bash
 pip install -r requirements.txt
+# Opcional en local: set API_KEY=tu-clave
 python app.py
+```
+
+Tests:
+
+```bash
+python -m unittest tests.test_api -v
 ```
 
 Abre http://localhost:5000 en tu navegador.
 
 En iOS/Android: Abre Safari/Chrome → Compartir → "Agregar a inicio"
 
+### Deploy Fly.io (sin commit automático)
+
+```bash
+# Instalar flyctl: https://fly.io/docs/hands-on/install-flyctl/
+fly auth login
+fly launch --no-deploy   # o usa el fly.toml existente
+fly postgres create --name inventario-db --region bog
+fly postgres attach inventario-db
+fly secrets set API_KEY=tu-clave-larga
+# opcional: fly secrets set GEMINI_API_KEY=...
+fly deploy
+```
+
 ## API Endpoints
 
 | Metodo | Endpoint | Descripcion |
 |--------|----------|-------------|
+| GET | /api/auth/status | Si la API exige clave y si hay sesión |
+| POST | /api/auth/login | Login con `{password}` (= API_KEY) |
+| POST | /api/auth/logout | Cierra sesión (borra cookie) |
 | GET | /api/productos | Lista productos (filtros `tipo_id`, `q`; paginación `limit`/`offset`) |
 | POST | /api/productos | Crea desde foto |
 | PUT | /api/productos/<id> | Edita (parcial, foto opcional) |

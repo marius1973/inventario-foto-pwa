@@ -152,6 +152,19 @@
         </button>
     </div>
 
+    <div id="modal-login" class="fixed inset-0 bg-slate-900/90 z-[80] hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl w-full max-w-sm p-6 shadow-xl">
+            <h2 class="text-lg font-bold text-slate-900 mb-1">Acceso</h2>
+            <p class="text-sm text-slate-500 mb-4">Ingresa la clave de la API para usar el inventario.</p>
+            <input type="password" id="login-password" placeholder="API key / clave"
+                class="w-full border border-slate-200 rounded-lg px-4 py-3 mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onkeydown="if(event.key==='Enter')app.enviarLogin()">
+            <p id="login-error" class="text-sm text-red-600 mb-3 min-h-[1.25rem]"></p>
+            <button type="button" onclick="app.enviarLogin()"
+                class="w-full py-3 rounded-lg bg-blue-500 text-white font-medium">Entrar</button>
+        </div>
+    </div>
+
     <div id="modal-tipo" class="fixed inset-0 bg-black/50 z-50 hidden flex items-end sm:items-center justify-center">
         <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-96 p-6 slide-up">
             <h3 id="modal-tipo-titulo" class="text-lg font-bold mb-4">Crear nuevo tipo</h3>

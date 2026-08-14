@@ -37,10 +37,36 @@ class ApiService {
      * Servicio para todas las comunicaciones REST con el backend.
      */
 
+    static TOKEN_KEY = 'inventario_api_token';
+
+    static getToken() {
+        return localStorage.getItem(this.TOKEN_KEY) || '';
+    }
+
+    static setToken(token) {
+        if (token) localStorage.setItem(this.TOKEN_KEY, token);
+        else localStorage.removeItem(this.TOKEN_KEY);
+    }
+
+    static _headers(extra = {}) {
+        const headers = { ...extra };
+        const token = this.getToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+        return headers;
+    }
+
     static async fetchJson(endpoint, options = {}) {
         const url = `${CONSTANTS.API_BASE}${endpoint}`;
         try {
-            const response = await fetch(url, options);
+            const response = await fetch(url, {
+                ...options,
+                credentials: 'include',
+                headers: this._headers(options.headers || {}),
+            });
+            if (response.status === 401) {
+                this.setToken('');
+                window.dispatchEvent(new CustomEvent('auth:required'));
+            }
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
                 throw new Error(error.error || `Error ${response.status}`);
@@ -50,6 +76,48 @@ class ApiService {
             console.error(`Error en ${endpoint}:`, error);
             throw error;
         }
+    }
+
+    static authStatus() {
+        return this.fetchJson('/api/auth/status');
+    }
+
+    static async login(password) {
+        const data = await this.fetchJson('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+        });
+        if (data.token) this.setToken(data.token);
+        return data;
+    }
+
+    static async logout() {
+        try {
+            await this.fetchJson('/api/auth/logout', { method: 'POST' });
+        } finally {
+            this.setToken('');
+        }
+    }
+
+    static async exportar(formato = 'xlsx') {
+        const response = await fetch(`${CONSTANTS.API_BASE}/api/export?formato=${encodeURIComponent(formato)}`, {
+            credentials: 'include',
+            headers: this._headers(),
+        });
+        if (response.status === 401) {
+            this.setToken('');
+            window.dispatchEvent(new CustomEvent('auth:required'));
+            throw new Error('No autorizado');
+        }
+        if (!response.ok) throw new Error(`Error ${response.status}`);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `inventario.${formato === 'csv' ? 'csv' : 'xlsx'}`;
+        a.click();
+        URL.revokeObjectURL(url);
     }
 
     // Tipos de productos
@@ -77,7 +145,15 @@ class ApiService {
         const url = reasignarA
             ? `/api/tipos-producto/${id}?reasignar_a=${encodeURIComponent(reasignarA)}`
             : `/api/tipos-producto/${id}`;
-        const respuesta = await fetch(url, { method: 'DELETE' });
+        const respuesta = await fetch(`${CONSTANTS.API_BASE}${url}`, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers: this._headers(),
+        });
+        if (respuesta.status === 401) {
+            this.setToken('');
+            window.dispatchEvent(new CustomEvent('auth:required'));
+        }
         const body = await respuesta.json().catch(() => ({}));
         return { ok: respuesta.ok, status: respuesta.status, body };
     }
@@ -704,6 +780,9 @@ class InventarioApp {
     async inicializar() {
         try {
             await this.storage.init();
+            window.addEventListener('auth:required', () => this.mostrarLogin());
+            const ok = await this._asegurarAuth();
+            if (!ok) return;
             // Cargar configuración (moneda)
             try {
                 const config = await ApiService.getConfig();
@@ -718,6 +797,64 @@ class InventarioApp {
         } catch (error) {
             console.error('Error inicializando:', error);
             UIManager.mostrarToast('Error al inicializar la aplicación', 'error');
+        }
+    }
+
+    async _asegurarAuth() {
+        try {
+            const status = await ApiService.authStatus();
+            if (!status.auth_required || status.authenticated) return true;
+        } catch (error) {
+            console.warn('No se pudo verificar auth:', error);
+        }
+        this.mostrarLogin();
+        return false;
+    }
+
+    mostrarLogin() {
+        const modal = document.getElementById('modal-login');
+        if (modal) modal.classList.remove('hidden');
+        const input = document.getElementById('login-password');
+        if (input) setTimeout(() => input.focus(), 50);
+    }
+
+    ocultarLogin() {
+        const modal = document.getElementById('modal-login');
+        if (modal) modal.classList.add('hidden');
+    }
+
+    async enviarLogin() {
+        const input = document.getElementById('login-password');
+        const errorEl = document.getElementById('login-error');
+        const password = (input?.value || '').trim();
+        if (!password) {
+            if (errorEl) errorEl.textContent = 'Ingresa la clave de acceso';
+            return;
+        }
+        try {
+            await ApiService.login(password);
+            this.ocultarLogin();
+            if (input) input.value = '';
+            if (errorEl) errorEl.textContent = '';
+            UIManager.mostrarToast('Sesión iniciada', 'success');
+            await this.inicializar();
+        } catch (error) {
+            if (errorEl) errorEl.textContent = error.message || 'Clave incorrecta';
+        }
+    }
+
+    async cerrarSesion() {
+        await ApiService.logout();
+        UIManager.mostrarToast('Sesión cerrada', 'success');
+        this.mostrarLogin();
+    }
+
+    async exportar(formato) {
+        try {
+            await ApiService.exportar(formato);
+            UIManager.mostrarToast('Descarga iniciada', 'success');
+        } catch (error) {
+            UIManager.mostrarToast(error.message || 'No se pudo exportar', 'error');
         }
     }
 
@@ -921,14 +1058,19 @@ class InventarioApp {
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="font-semibold text-slate-900">Historial completo</h2>
                     <div class="flex space-x-2">
-                        <a href="/api/export?formato=xlsx" download
+                        <button type="button" onclick="app.exportar('xlsx')"
                             class="flex items-center space-x-1 px-3 py-2 rounded-lg bg-green-600 text-white text-xs font-medium active:scale-95 transition">
                             <span>📊</span><span>Excel</span>
-                        </a>
-                        <a href="/api/export?formato=csv" download
+                        </button>
+                        <button type="button" onclick="app.exportar('csv')"
                             class="flex items-center space-x-1 px-3 py-2 rounded-lg bg-slate-600 text-white text-xs font-medium active:scale-95 transition">
                             <span>📄</span><span>CSV</span>
-                        </a>
+                        </button>
+                        <button type="button" onclick="app.cerrarSesion()"
+                            class="flex items-center space-x-1 px-3 py-2 rounded-lg bg-slate-200 text-slate-700 text-xs font-medium active:scale-95 transition"
+                            title="Cerrar sesión">
+                            <span>🔒</span>
+                        </button>
                     </div>
                 </div>
                 <div class="space-y-3">

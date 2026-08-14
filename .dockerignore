@@ -1,0 +1,10 @@
+.git
+__pycache__
+*.pyc
+*.db
+.env
+.env.*
+!.env.example
+*.docx
+uploads
+.python-version
